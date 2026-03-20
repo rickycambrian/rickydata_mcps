@@ -1,0 +1,15 @@
+{
+  "name": "rickydata-mcps",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Custom MCP servers monorepo",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "echo 'Run dev in individual packages: cd packages/<name> && npm run dev'",
+    "clean": "npm run clean --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
