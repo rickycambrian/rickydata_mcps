@@ -11,7 +11,7 @@
  * 3. The derived key is used for agent0-sdk write operations
  */
 import { hkdf } from "@noble/hashes/hkdf";
-import { sha256 } from "@noble/hashes/sha2";
+import { sha256 } from "@noble/hashes/sha256";
 import { ethers } from "ethers";
 
 export interface DerivedWallet {
