@@ -184,7 +184,7 @@ function requireAuth(): { sdk: ReturnType<typeof getAuthenticatedSDK>; error?: s
         "No wallet configured. Call configure_wallet first with a private key or signature.",
     };
   }
-  const sdk = getAuthenticatedSDK();
+  const sdk = await getAuthenticatedSDK();
   if (!sdk) {
     return { sdk: null, error: "Failed to initialize authenticated SDK." };
   }

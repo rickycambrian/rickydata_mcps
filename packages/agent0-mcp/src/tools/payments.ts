@@ -63,7 +63,7 @@ async function handleX402Request(
     };
   }
 
-  const sdk = getAuthenticatedSDK();
+  const sdk = await getAuthenticatedSDK();
   if (!sdk) return { error: "Failed to initialize authenticated SDK." };
 
   const url = args.url as string;

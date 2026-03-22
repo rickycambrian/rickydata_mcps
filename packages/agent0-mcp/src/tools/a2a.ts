@@ -80,7 +80,7 @@ function requireAuth() {
       error: "No wallet configured. Call configure_wallet first.",
     };
   }
-  const sdk = getAuthenticatedSDK();
+  const sdk = await getAuthenticatedSDK();
   if (!sdk) {
     return { sdk: null as ReturnType<typeof getAuthenticatedSDK>, error: "Failed to initialize authenticated SDK." };
   }

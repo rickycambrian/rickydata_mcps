@@ -244,7 +244,7 @@ async function handleSearchAgents(
   );
 
   const chainId = (args.chains as number[] | undefined)?.[0] ?? DEFAULT_CHAIN_ID;
-  const sdk = getReadOnlySDK(chainId);
+  const sdk = await getReadOnlySDK(chainId);
 
   const filters: Record<string, unknown> = {};
   if (args.name) filters.name = args.name;
@@ -294,7 +294,7 @@ async function handleGetAgent(
   }
 
   const chainId = parseInt(parts[0], 10);
-  const sdk = getReadOnlySDK(chainId);
+  const sdk = await getReadOnlySDK(chainId);
   const agent = await sdk.getAgent(agentId);
 
   if (!agent) {
@@ -374,7 +374,7 @@ async function handleGetPlatformStats(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   const chainId = (args.chainId as number) ?? DEFAULT_CHAIN_ID;
-  const sdk = getReadOnlySDK(chainId);
+  const sdk = await getReadOnlySDK(chainId);
 
   // Fetch all agents on this chain (no filter)
   const allAgents = await sdk.searchAgents({}, { sort: ["updatedAt:desc"] });
@@ -423,7 +423,7 @@ async function handleGetReputationSummary(
   }
 
   const chainId = parseInt(parts[0], 10);
-  const sdk = getReadOnlySDK(chainId);
+  const sdk = await getReadOnlySDK(chainId);
   const tag = args.tag as string | undefined;
 
   const reputation = await sdk.getReputationSummary(agentId, tag);
@@ -455,7 +455,7 @@ async function handleSearchFeedback(
 
   const parts = firstId.split(":");
   const chainId = parts.length === 2 ? parseInt(parts[0], 10) : DEFAULT_CHAIN_ID;
-  const sdk = getReadOnlySDK(chainId);
+  const sdk = await getReadOnlySDK(chainId);
 
   const filters: Record<string, unknown> = {};
   if (agentId) filters.agentId = agentId;

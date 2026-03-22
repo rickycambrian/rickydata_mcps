@@ -78,14 +78,14 @@ export const reputationTools: Tool[] = [
 // HANDLERS
 // ============================================================================
 
-function requireAuth() {
+async function requireAuth() {
   if (!hasAuthentication()) {
     return {
       sdk: null as ReturnType<typeof getAuthenticatedSDK>,
       error: "No wallet configured. Call configure_wallet first.",
     };
   }
-  const sdk = getAuthenticatedSDK();
+  const sdk = await getAuthenticatedSDK();
   if (!sdk) {
     return { sdk: null as ReturnType<typeof getAuthenticatedSDK>, error: "Failed to initialize authenticated SDK." };
   }
@@ -95,7 +95,7 @@ function requireAuth() {
 async function handleGiveFeedback(
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const { sdk, error } = requireAuth();
+  const { sdk, error } = await requireAuth();
   if (error || !sdk) return { error };
 
   const agentId = args.agentId as string;
@@ -142,7 +142,7 @@ async function handleGiveFeedback(
 async function handleRevokeFeedback(
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const { sdk, error } = requireAuth();
+  const { sdk, error } = await requireAuth();
   if (error || !sdk) return { error };
 
   const agentId = args.agentId as string;
