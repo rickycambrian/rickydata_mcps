@@ -8,7 +8,10 @@
  * 2. ERC8004_DERIVED_KEY env var (previously derived key from wallet signature)
  * 3. Prompt user for wallet signature derivation (via configure_wallet tool)
  */
-import { SDK, type SDKConfig } from "agent0-sdk";
+// Dynamic import to avoid module-level initialization from agent0-sdk
+// which can hang in containerized environments with network restrictions
+type SDKConfig = { chainId: number; rpcUrl?: string; privateKey?: string; ipfs?: string; pinataJwt?: string };
+async function loadSDK() { return (await import("agent0-sdk")).SDK; }
 
 // ============================================================================
 // CONFIGURATION
@@ -78,7 +81,7 @@ function buildConfig(
  * Get a read-only SDK instance (no signing capabilities).
  * Suitable for search, discovery, and reputation queries.
  */
-export function getReadOnlySDK(chainId?: number): SDK {
+export async function getReadOnlySDK(chainId?: number): Promise<any> {
   const targetChain = chainId ?? _currentChainId;
 
   // Cache the read-only SDK for the current chain
@@ -86,6 +89,7 @@ export function getReadOnlySDK(chainId?: number): SDK {
     return _readOnlySDK;
   }
 
+  const SDK = await loadSDK();
   _readOnlySDK = new SDK(buildConfig(targetChain));
   if (!chainId) _currentChainId = targetChain;
   return _readOnlySDK;
@@ -95,7 +99,7 @@ export function getReadOnlySDK(chainId?: number): SDK {
  * Get an authenticated SDK instance (with signing capabilities).
  * Returns null if no private key is available.
  */
-export function getAuthenticatedSDK(chainId?: number): SDK | null {
+export async function getAuthenticatedSDK(chainId?: number): Promise<any | null> {
   const privateKey = resolvePrivateKey();
   if (!privateKey) return null;
 
@@ -110,6 +114,7 @@ export function getAuthenticatedSDK(chainId?: number): SDK | null {
     return _authenticatedSDK;
   }
 
+  const SDK = await loadSDK();
   _authenticatedSDK = new SDK(buildConfig(targetChain, privateKey));
   _currentPrivateKey = privateKey;
   _currentChainId = targetChain;

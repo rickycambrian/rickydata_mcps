@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { FeedbackFileInput } from "agent0-sdk";
+// Dynamic type - FeedbackFileInput used inline
 import {
   getAuthenticatedSDK,
   hasAuthentication,

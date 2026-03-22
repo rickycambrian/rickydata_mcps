@@ -1,5 +1,6 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { isX402Required } from "agent0-sdk";
+// Lazy import to avoid module-level init
+async function getX402Helper() { return (await import("agent0-sdk")).isX402Required; }
 import {
   getAuthenticatedSDK,
   hasAuthentication,

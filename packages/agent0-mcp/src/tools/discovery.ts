@@ -1,15 +1,16 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { SDK } from "agent0-sdk";
 import { computeTrustLabel } from "../utils/trust-labels.js";
 import { getChainName, CHAINS } from "../utils/chains.js";
 
 // ============================================================================
 // SDK INITIALIZATION (read-only, no private key needed)
+// Lazy import to avoid module-level network calls from agent0-sdk
 // ============================================================================
 
 const DEFAULT_CHAIN_ID = parseInt(process.env.AGENT0_CHAIN_ID || "11155111", 10);
 
-function getReadOnlySDK(chainId?: number): SDK {
+async function getReadOnlySDK(chainId?: number): Promise<any> {
+  const { SDK } = await import("agent0-sdk");
   return new SDK({ chainId: chainId ?? DEFAULT_CHAIN_ID });
 }
 
