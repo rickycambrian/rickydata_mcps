@@ -1,7 +1,7 @@
 {
   "name": "@rickydata/agent0-mcp",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "MCP server wrapping Agent0 SDK for ERC-8004 trustless agent operations",
   "type": "module",
   "main": "dist/index.js",
