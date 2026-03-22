@@ -165,10 +165,11 @@ app.delete("/mcp", async (req, res) => {
 // START
 // ============================================================================
 
-const isStdio = process.argv.includes("--stdio");
+const isHttp = process.argv.includes("--http");
 
-if (isStdio) {
-  // In stdio mode, redirect console.log to stderr so it doesn't pollute the MCP JSON stream
+if (!isHttp) {
+  // Default: stdio mode (used by gateway containers and npx)
+  // Redirect console.log to stderr so it doesn't pollute the MCP JSON stream
   console.log = console.error;
   const server = createServer();
   setupMCPHandlers(server);
