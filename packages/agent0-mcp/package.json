@@ -1,0 +1,32 @@
+{
+  "name": "@rickydata/agent0-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server wrapping Agent0 SDK for ERC-8004 trustless agent operations",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "agent0-sdk": "^1.7.1",
+    "cors": "^2.8.5",
+    "ethers": "^6.16.0",
+    "express": "^4.21.2",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@noble/hashes": "^1.7.0",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}
