@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { discoveryTools, handleDiscoveryTool } from "../src/tools/discovery.js";
+import { setDerivedKey, setChainId } from "../src/auth/sdk-client.js";
 
 // Mock agent0-sdk so tests don't hit the real API
 vi.mock("agent0-sdk", () => {
@@ -7,6 +8,12 @@ vi.mock("agent0-sdk", () => {
   const mockGetAgent = vi.fn();
   const mockGetReputationSummary = vi.fn();
   const mockSearchFeedback = vi.fn();
+  const mockRegistries = vi.fn().mockResolvedValue({
+    identity: "0x8004A818BFB912233c491871b3d84c89A494BD9e",
+    reputation: "0x8004B663056A597Dffe9eCcC1965A193B7388713",
+    validation: "0x8004C000000000000000000000000000C0000001",
+  });
+  const mockLoadAgent = vi.fn();
 
   return {
     SDK: vi.fn().mockImplementation(() => ({
@@ -14,12 +21,16 @@ vi.mock("agent0-sdk", () => {
       getAgent: mockGetAgent,
       getReputationSummary: mockGetReputationSummary,
       searchFeedback: mockSearchFeedback,
+      registries: mockRegistries,
+      loadAgent: mockLoadAgent,
     })),
     __mocks: {
       mockSearchAgents,
       mockGetAgent,
       mockGetReputationSummary,
       mockSearchFeedback,
+      mockRegistries,
+      mockLoadAgent,
     },
   };
 });
@@ -60,14 +71,16 @@ function makeAgent(overrides: Record<string, unknown> = {}) {
 describe("discovery tools", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setChainId(11155111);
+    setDerivedKey("0x" + "aa".repeat(32));
   });
 
   // ===========================================================================
   // Tool registration
   // ===========================================================================
   describe("tool registration", () => {
-    it("registers 6 discovery tools", () => {
-      expect(discoveryTools).toHaveLength(6);
+    it("registers 8 discovery tools", () => {
+      expect(discoveryTools).toHaveLength(8);
     });
 
     const expectedTools = [
@@ -77,6 +90,8 @@ describe("discovery tools", () => {
       "get_platform_stats",
       "get_reputation_summary",
       "search_feedback",
+      "get_registries",
+      "load_agent",
     ];
 
     for (const toolName of expectedTools) {
@@ -440,6 +455,206 @@ describe("discovery tools", () => {
 
       expect(result.count).toBe(60);
       expect(result.feedbacks).toHaveLength(50);
+    });
+  });
+
+  // ===========================================================================
+  // get_registries
+  // ===========================================================================
+  describe("get_registries", () => {
+    it("returns registry contract addresses for default chain", async () => {
+      const mocks = await getMocks();
+
+      const result = (await handleDiscoveryTool("get_registries", {})) as {
+        chainId: number;
+        chain: string;
+        registries: {
+          identity: string;
+          reputation: string;
+          validation: string;
+        };
+      };
+
+      expect(result.chainId).toBe(11155111);
+      expect(result.registries.identity).toMatch(/^0x/);
+      expect(result.registries.reputation).toMatch(/^0x/);
+      expect(mocks.mockRegistries).toHaveBeenCalled();
+    });
+
+    it("uses provided chainId", async () => {
+      const { SDK } = await import("agent0-sdk");
+
+      await handleDiscoveryTool("get_registries", { chainId: 8453 });
+
+      expect(SDK).toHaveBeenCalledWith(
+        expect.objectContaining({ chainId: 8453 }),
+      );
+    });
+
+    it("includes chain name in response", async () => {
+      const result = (await handleDiscoveryTool("get_registries", {
+        chainId: 8453,
+      })) as { chain: string };
+
+      expect(result.chain).toBe("Base");
+    });
+
+    it("maps alternate registry field names (identityRegistry)", async () => {
+      const mocks = await getMocks();
+      // Simulate SDK returning alternate field names
+      mocks.mockRegistries.mockResolvedValueOnce({
+        identityRegistry: "0xIdentity",
+        reputationRegistry: "0xReputation",
+        validationRegistry: "0xValidation",
+      });
+
+      const result = (await handleDiscoveryTool("get_registries", {})) as {
+        registries: { identity: string; reputation: string; validation: string };
+      };
+
+      expect(result.registries.identity).toBe("0xIdentity");
+      expect(result.registries.reputation).toBe("0xReputation");
+      expect(result.registries.validation).toBe("0xValidation");
+    });
+  });
+
+  // ===========================================================================
+  // load_agent
+  // ===========================================================================
+  describe("load_agent", () => {
+    function makeFullAgent(overrides: Record<string, unknown> = {}) {
+      return {
+        name: "Full Test Agent",
+        description: "Detailed agent",
+        image: "https://example.com/img.png",
+        active: true,
+        mcp: "https://mcp.test/agent.json",
+        a2a: null,
+        web: null,
+        ens: null,
+        x402support: false,
+        owners: ["0x1234567890abcdef1234567890abcdef12345678"],
+        operators: [],
+        supportedTrusts: [],
+        mcpTools: ["search", "analyze"],
+        a2aSkills: [],
+        oasfSkills: [],
+        oasfDomains: [],
+        metadata: { version: "1.0" },
+        registrationMethod: "direct",
+        tokenURI: "ipfs://token",
+        updatedAt: 1700000000,
+        registeredAt: 1690000000,
+        ...overrides,
+      };
+    }
+
+    it("returns full agent data with reputation", async () => {
+      const mocks = await getMocks();
+      mocks.mockLoadAgent.mockResolvedValue(makeFullAgent());
+      mocks.mockGetReputationSummary.mockResolvedValue({
+        count: 5,
+        averageValue: 80,
+      });
+
+      const result = (await handleDiscoveryTool("load_agent", {
+        agentId: "11155111:42",
+      })) as {
+        agentId: string;
+        name: string;
+        chain: string;
+        mcp: string | null;
+        reputation: { count: number; averageValue: number; trustLabel: string };
+      };
+
+      expect(result.agentId).toBe("11155111:42");
+      expect(result.name).toBe("Full Test Agent");
+      expect(result.mcp).toBe("https://mcp.test/agent.json");
+      expect(result.reputation.count).toBe(5);
+      expect(result.reputation.averageValue).toBe(80);
+      expect(mocks.mockLoadAgent).toHaveBeenCalledWith("11155111:42");
+    });
+
+    it("returns error for missing agentId", async () => {
+      const result = (await handleDiscoveryTool("load_agent", {})) as {
+        error: string;
+      };
+      expect(result.error).toContain("agentId is required");
+    });
+
+    it("returns error for invalid agentId format", async () => {
+      const result = (await handleDiscoveryTool("load_agent", {
+        agentId: "bad-format",
+      })) as { error: string };
+      expect(result.error).toContain("Invalid agentId format");
+    });
+
+    it("returns error when agent not found", async () => {
+      const mocks = await getMocks();
+      mocks.mockLoadAgent.mockResolvedValue(null);
+
+      const result = (await handleDiscoveryTool("load_agent", {
+        agentId: "11155111:99999",
+      })) as { error: string };
+      expect(result.error).toContain("not found");
+    });
+
+    it("uses authenticated SDK when wallet is configured", async () => {
+      const mocks = await getMocks();
+      mocks.mockLoadAgent.mockResolvedValue(makeFullAgent());
+      mocks.mockGetReputationSummary.mockResolvedValue({ count: 0, averageValue: 0 });
+      const { SDK } = await import("agent0-sdk");
+
+      await handleDiscoveryTool("load_agent", { agentId: "11155111:42" });
+
+      // SDK should be constructed with a private key (authenticated)
+      expect(SDK).toHaveBeenCalledWith(
+        expect.objectContaining({ privateKey: expect.any(String) }),
+      );
+    });
+
+    it("falls back to read-only SDK when no wallet configured", async () => {
+      setDerivedKey("");
+      const mocks = await getMocks();
+      mocks.mockLoadAgent.mockResolvedValue(makeFullAgent());
+      mocks.mockGetReputationSummary.mockResolvedValue({ count: 0, averageValue: 0 });
+      const { SDK } = await import("agent0-sdk");
+      (SDK as ReturnType<typeof vi.fn>).mockClear();
+
+      await handleDiscoveryTool("load_agent", { agentId: "11155111:42" });
+
+      // SDK should be constructed without a private key (read-only)
+      expect(SDK).toHaveBeenCalledWith(
+        expect.not.objectContaining({ privateKey: expect.any(String) }),
+      );
+
+      setDerivedKey("0x" + "aa".repeat(32));
+    });
+
+    it("sets reputation to null when reputation fetch fails", async () => {
+      const mocks = await getMocks();
+      mocks.mockLoadAgent.mockResolvedValue(makeFullAgent());
+      mocks.mockGetReputationSummary.mockRejectedValue(
+        new Error("Reputation unavailable"),
+      );
+
+      const result = (await handleDiscoveryTool("load_agent", {
+        agentId: "11155111:42",
+      })) as { reputation: null };
+
+      expect(result.reputation).toBeNull();
+    });
+
+    it("includes chain name in response", async () => {
+      const mocks = await getMocks();
+      mocks.mockLoadAgent.mockResolvedValue(makeFullAgent());
+      mocks.mockGetReputationSummary.mockResolvedValue({ count: 0, averageValue: 0 });
+
+      const result = (await handleDiscoveryTool("load_agent", {
+        agentId: "8453:42",
+      })) as { chain: string };
+
+      expect(result.chain).toBe("Base");
     });
   });
 

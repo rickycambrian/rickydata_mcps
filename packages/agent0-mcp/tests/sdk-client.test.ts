@@ -36,28 +36,28 @@ describe("sdk-client", () => {
   });
 
   describe("getReadOnlySDK", () => {
-    it("returns an SDK instance", () => {
-      const sdk = getReadOnlySDK();
+    it("returns an SDK instance", async () => {
+      const sdk = await getReadOnlySDK();
       expect(sdk).toBeDefined();
       expect(SDK).toHaveBeenCalled();
     });
 
-    it("caches the SDK for the same chain", () => {
-      const sdk1 = getReadOnlySDK();
-      const sdk2 = getReadOnlySDK();
+    it("caches the SDK for the same chain", async () => {
+      const sdk1 = await getReadOnlySDK();
+      const sdk2 = await getReadOnlySDK();
       expect(sdk1).toBe(sdk2);
     });
 
-    it("creates new SDK for a different chain", () => {
-      const sdk1 = getReadOnlySDK(1);
-      const sdk2 = getReadOnlySDK(8453);
+    it("creates new SDK for a different chain", async () => {
+      await getReadOnlySDK(1);
+      await getReadOnlySDK(8453);
       // Different chain IDs should create different instances
       // (though the second call changes the cached chain)
       expect(SDK).toHaveBeenCalledTimes(2);
     });
 
-    it("passes chainId to SDK config", () => {
-      getReadOnlySDK(8453);
+    it("passes chainId to SDK config", async () => {
+      await getReadOnlySDK(8453);
       expect(SDK).toHaveBeenCalledWith(
         expect.objectContaining({ chainId: 8453 }),
       );
@@ -65,26 +65,26 @@ describe("sdk-client", () => {
   });
 
   describe("getAuthenticatedSDK", () => {
-    it("returns null when no private key is available", () => {
-      const sdk = getAuthenticatedSDK();
+    it("returns null when no private key is available", async () => {
+      const sdk = await getAuthenticatedSDK();
       expect(sdk).toBeNull();
     });
 
-    it("returns SDK when ERC8004_PRIVATE_KEY env is set", () => {
+    it("returns SDK when ERC8004_PRIVATE_KEY env is set", async () => {
       process.env.ERC8004_PRIVATE_KEY = "0x1234";
-      const sdk = getAuthenticatedSDK();
+      const sdk = await getAuthenticatedSDK();
       expect(sdk).not.toBeNull();
     });
 
-    it("returns SDK when ERC8004_DERIVED_KEY env is set", () => {
+    it("returns SDK when ERC8004_DERIVED_KEY env is set", async () => {
       process.env.ERC8004_DERIVED_KEY = "0xabcd";
-      const sdk = getAuthenticatedSDK();
+      const sdk = await getAuthenticatedSDK();
       expect(sdk).not.toBeNull();
     });
 
-    it("returns SDK after setDerivedKey is called", () => {
+    it("returns SDK after setDerivedKey is called", async () => {
       setDerivedKey("0xdeadbeef");
-      const sdk = getAuthenticatedSDK();
+      const sdk = await getAuthenticatedSDK();
       expect(sdk).not.toBeNull();
     });
   });
