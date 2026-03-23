@@ -186,6 +186,51 @@ describe("discovery tools", () => {
         expect.any(Object),
       );
     });
+
+    it("converts chainId (number) to chains array via compatibility shim", async () => {
+      const mocks = await getMocks();
+      mocks.mockSearchAgents.mockResolvedValue([]);
+      const { SDK } = await import("agent0-sdk");
+      (SDK as ReturnType<typeof vi.fn>).mockClear();
+
+      await handleDiscoveryTool("search_agents", { chainId: 8453 });
+
+      // SDK should be initialized with chain 8453 (Base), not default
+      expect(SDK).toHaveBeenCalledWith(
+        expect.objectContaining({ chainId: 8453 }),
+      );
+    });
+
+    it("prefers chains array over chainId when both provided", async () => {
+      const mocks = await getMocks();
+      mocks.mockSearchAgents.mockResolvedValue([]);
+      const { SDK } = await import("agent0-sdk");
+      (SDK as ReturnType<typeof vi.fn>).mockClear();
+
+      await handleDiscoveryTool("search_agents", {
+        chainId: 8453,
+        chains: [1],
+      });
+
+      // chains array takes precedence — should use chain 1 (Ethereum)
+      expect(SDK).toHaveBeenCalledWith(
+        expect.objectContaining({ chainId: 1 }),
+      );
+    });
+
+    it("uses Ethereum mainnet (1) as default when no chain specified", async () => {
+      const mocks = await getMocks();
+      mocks.mockSearchAgents.mockResolvedValue([]);
+      const { SDK } = await import("agent0-sdk");
+      (SDK as ReturnType<typeof vi.fn>).mockClear();
+
+      await handleDiscoveryTool("search_agents", {});
+
+      // Default should be chain 1 (Ethereum mainnet), NOT 11155111 (Sepolia)
+      expect(SDK).toHaveBeenCalledWith(
+        expect.objectContaining({ chainId: 1 }),
+      );
+    });
   });
 
   // ===========================================================================
@@ -475,7 +520,7 @@ describe("discovery tools", () => {
         };
       };
 
-      expect(result.chainId).toBe(11155111);
+      expect(result.chainId).toBe(1); // Default is now Ethereum mainnet
       expect(result.registries.identity).toMatch(/^0x/);
       expect(result.registries.reputation).toMatch(/^0x/);
       expect(mocks.mockRegistries).toHaveBeenCalled();

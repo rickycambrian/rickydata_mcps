@@ -11,7 +11,7 @@ import {
 // Lazy import to avoid module-level network calls from agent0-sdk
 // ============================================================================
 
-const DEFAULT_CHAIN_ID = parseInt(process.env.AGENT0_CHAIN_ID || "11155111", 10);
+const DEFAULT_CHAIN_ID = parseInt(process.env.AGENT0_CHAIN_ID || "1", 10);
 
 async function getReadOnlySDK(chainId?: number): Promise<any> {
   const { SDK } = await import("agent0-sdk");
@@ -140,7 +140,7 @@ export const discoveryTools: Tool[] = [
           type: "array",
           items: { type: "number" },
           description:
-            "Chain IDs to search (default: [11155111]). Use [1, 8453, 137, 11155111] for all supported chains.",
+            "Chain IDs to search (default: [1] Ethereum mainnet). Use [1, 8453, 137, 11155111] for all supported chains.",
         },
         minFeedbackValue: {
           type: "number",
@@ -320,6 +320,11 @@ export const discoveryTools: Tool[] = [
 async function handleSearchAgents(
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  // Compatibility shim: MCP gateway may expose `chainId` (number) instead of `chains` (array)
+  if (args.chainId !== undefined && !args.chains) {
+    args.chains = [args.chainId as number];
+  }
+
   const limit = Math.min(
     Math.max(1, (args.limit as number) ?? 20),
     100,
