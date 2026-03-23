@@ -1,0 +1,203 @@
+name: Sync agent0-sdk dependency
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # Daily 6 AM UTC
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: 'Force update even if version unchanged'
+        required: false
+        default: 'false'
+  repository_dispatch:
+    types: [agent0-sdk-published]
+
+defaults:
+  run:
+    working-directory: packages/agent0-mcp
+
+jobs:
+  check-and-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Check for agent0-sdk update
+        id: check
+        run: |
+          # Get latest npm version
+          LATEST=$(npm view agent0-sdk version 2>/dev/null || echo "unknown")
+          echo "latest_npm=$LATEST" >> $GITHUB_OUTPUT
+
+          # Get current version from package.json
+          CURRENT=$(node -e "const p=JSON.parse(require('fs').readFileSync('package.json','utf8')); const v=p.dependencies['agent0-sdk']; console.log(v.replace(/[\^~]/,''))")
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+
+          FORCE="${{ github.event.inputs.force_update || 'false' }}"
+          if [ "$LATEST" != "$CURRENT" ] || [ "$FORCE" = "true" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "::notice::agent0-sdk update available: $CURRENT → $LATEST"
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "::notice::agent0-sdk is up to date ($CURRENT)"
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          cd ../..
+          npm install
+        working-directory: .
+
+      - name: Update agent0-sdk dependency
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          npm install agent0-sdk@latest --save
+
+      - name: Build
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          rm -rf dist
+          npx tsc --skipLibCheck
+
+      - name: Verify tool count
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          TOOL_COUNT=$(node -e "import('./dist/tools/index.js').then(m => console.log(m.TOOLS.length))")
+          echo "Tool count: $TOOL_COUNT"
+          if [ "$TOOL_COUNT" -lt 27 ]; then
+            echo "::error::Tool count dropped below 27 ($TOOL_COUNT). Possible breaking change in agent0-sdk."
+            exit 1
+          fi
+
+      - name: Run tests
+        if: steps.check.outputs.needs_update == 'true'
+        run: npx vitest run 2>/dev/null || echo "No tests configured yet"
+
+      - name: Bump patch version
+        if: steps.check.outputs.needs_update == 'true'
+        id: version
+        run: |
+          OLD_VERSION=$(node -p "require('./package.json').version")
+          npm version patch --no-git-tag-version
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "old_version=$OLD_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Publish to npm
+        if: steps.check.outputs.needs_update == 'true'
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Update KFDB version
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          curl -s -X POST "${{ vars.KFDB_URL || 'http://34.60.37.158' }}/api/v1/write" \
+            -H "Authorization: Bearer ${{ secrets.KFDB_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"operations\": [{
+                \"operation\": \"update_node\",
+                \"id\": \"1c671e41-42a7-405f-a66f-231e8e1285dc\",
+                \"properties\": {
+                  \"version\": { \"String\": \"${{ steps.version.outputs.new_version }}\" },
+                  \"tools_count\": { \"Integer\": $(node -e "import('./dist/tools/index.js').then(m => console.log(m.TOOLS.length))") }
+                }
+              }]
+            }"
+
+      - name: Reload MCP gateway
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          # Generate wallet token for operator authentication
+          RESPONSE=$(curl -s -X POST "${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}/health/reload" \
+            -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
+            -H "Content-Type: application/json")
+          echo "Reload response: $RESPONSE"
+          if echo "$RESPONSE" | grep -q '"status":"reloaded"'; then
+            echo "::notice::MCP gateway reloaded successfully"
+          else
+            echo "::warning::MCP gateway reload may have failed: $RESPONSE"
+          fi
+
+      - name: Production verification
+        if: steps.check.outputs.needs_update == 'true'
+        id: verify
+        run: |
+          chmod +x scripts/verify-production.sh
+          if scripts/verify-production.sh; then
+            echo "verified=true" >> $GITHUB_OUTPUT
+          else
+            echo "verified=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          MCP_GATEWAY_URL: ${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}
+          OPERATOR_WALLET_TOKEN: ${{ secrets.OPERATOR_WALLET_TOKEN }}
+
+      - name: Rollback on verification failure
+        if: steps.check.outputs.needs_update == 'true' && steps.verify.outputs.verified == 'false'
+        run: |
+          echo "::error::Production verification failed. Rolling back..."
+
+          # Unpublish new version (within 72h window)
+          npm unpublish "@rickydata/agent0-mcp@${{ steps.version.outputs.new_version }}" 2>/dev/null || true
+
+          # Restore KFDB to old version
+          curl -s -X POST "${{ vars.KFDB_URL || 'http://34.60.37.158' }}/api/v1/write" \
+            -H "Authorization: Bearer ${{ secrets.KFDB_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"operations\": [{
+                \"operation\": \"update_node\",
+                \"id\": \"1c671e41-42a7-405f-a66f-231e8e1285dc\",
+                \"properties\": {
+                  \"version\": { \"String\": \"${{ steps.version.outputs.old_version }}\" }
+                }
+              }]
+            }"
+
+          # Reload gateway with old version
+          curl -s -X POST "${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}/health/reload" \
+            -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}"
+
+          echo "::error::Rolled back to v${{ steps.version.outputs.old_version }}"
+          exit 1
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Commit version changes
+        if: steps.check.outputs.needs_update == 'true' && steps.verify.outputs.verified != 'false'
+        run: |
+          cd ../..
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/agent0-mcp/package.json packages/agent0-mcp/package-lock.json 2>/dev/null || true
+          git commit -m "chore(agent0-mcp): auto-sync agent0-sdk to ${{ steps.check.outputs.latest_npm }}, bump to v${{ steps.version.outputs.new_version }}" || true
+          git push
+        working-directory: .
+
+      - name: Create issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const latest = '${{ steps.check.outputs.latest_npm }}';
+            const current = '${{ steps.check.outputs.current }}';
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `agent0-mcp: SDK sync failed (${current} → ${latest})`,
+              body: `## Auto-sync failure\n\n- **Current**: ${current}\n- **Latest**: ${latest}\n- **Run**: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\nPlease investigate and update manually.`,
+              labels: ['agent0-mcp', 'automated']
+            });

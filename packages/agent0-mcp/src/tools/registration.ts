@@ -176,7 +176,7 @@ export const registrationTools: Tool[] = [
 // HANDLERS
 // ============================================================================
 
-function requireAuth(): { sdk: ReturnType<typeof getAuthenticatedSDK>; error?: string } {
+async function requireAuth(): Promise<{ sdk: any; error?: string }> {
   if (!hasAuthentication()) {
     return {
       sdk: null,
@@ -264,7 +264,7 @@ async function handleConfigureWallet(
 async function handleRegisterAgent(
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const { sdk, error } = requireAuth();
+  const { sdk, error } = await requireAuth();
   if (error || !sdk) return { error };
 
   const agent = sdk.createAgent(
@@ -318,7 +318,7 @@ async function handleRegisterAgent(
 async function handleUpdateAgent(
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const { sdk, error } = requireAuth();
+  const { sdk, error } = await requireAuth();
   if (error || !sdk) return { error };
 
   const agentId = args.agentId as string;

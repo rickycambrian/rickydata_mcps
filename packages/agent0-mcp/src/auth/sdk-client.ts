@@ -10,7 +10,7 @@
  */
 // Dynamic import to avoid module-level initialization from agent0-sdk
 // which can hang in containerized environments with network restrictions
-type SDKConfig = { chainId: number; rpcUrl?: string; privateKey?: string; ipfs?: string; pinataJwt?: string };
+type SDKConfig = { chainId: number; rpcUrl?: string; privateKey?: string; ipfs?: "pinata" | "helia" | "node" | "filecoinPin"; pinataJwt?: string };
 async function loadSDK() { return (await import("agent0-sdk")).SDK; }
 
 // ============================================================================
@@ -30,8 +30,8 @@ const PINATA_JWT = process.env.PINATA_JWT;
 // SDK CLIENT STATE
 // ============================================================================
 
-let _readOnlySDK: SDK | null = null;
-let _authenticatedSDK: SDK | null = null;
+let _readOnlySDK: any = null;
+let _authenticatedSDK: any = null;
 let _currentPrivateKey: string | null = null;
 let _currentChainId: number = DEFAULT_CHAIN_ID;
 
@@ -59,7 +59,7 @@ function buildConfig(
   chainId: number,
   privateKey?: string | null,
 ): SDKConfig {
-  const config: SDKConfig = { chainId };
+  const config: any = { chainId };
 
   if (RPC_URL) config.rpcUrl = RPC_URL;
   if (privateKey) config.privateKey = privateKey;

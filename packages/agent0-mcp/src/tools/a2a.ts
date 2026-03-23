@@ -67,22 +67,89 @@ export const a2aTools: Tool[] = [
       required: ["agentId", "taskId"],
     },
   },
+  {
+    name: "a2a_query_task",
+    description:
+      "Query an A2A task to get its current status, messages, and artifacts. " +
+      "Optionally limit how much conversation history is returned.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agentId: {
+          type: "string",
+          description: "Agent ID in chainId:tokenId format",
+        },
+        taskId: {
+          type: "string",
+          description: "Task ID to query",
+        },
+        historyLength: {
+          type: "number",
+          description: "Number of recent messages to include (default: all)",
+        },
+      },
+      required: ["agentId", "taskId"],
+    },
+  },
+  {
+    name: "a2a_task_message",
+    description:
+      "Send a follow-up message to an existing A2A task. " +
+      "Continues the conversation within the task context.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agentId: {
+          type: "string",
+          description: "Agent ID in chainId:tokenId format",
+        },
+        taskId: {
+          type: "string",
+          description: "Existing task ID to send message to",
+        },
+        message: {
+          type: "string",
+          description: "Message text to send",
+        },
+      },
+      required: ["agentId", "taskId", "message"],
+    },
+  },
+  {
+    name: "a2a_cancel_task",
+    description:
+      "Cancel an in-progress A2A task. Requires configured wallet.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agentId: {
+          type: "string",
+          description: "Agent ID in chainId:tokenId format",
+        },
+        taskId: {
+          type: "string",
+          description: "Task ID to cancel",
+        },
+      },
+      required: ["agentId", "taskId"],
+    },
+  },
 ];
 
 // ============================================================================
 // HELPERS
 // ============================================================================
 
-function requireAuth() {
+async function requireAuth() {
   if (!hasAuthentication()) {
     return {
-      sdk: null as ReturnType<typeof getAuthenticatedSDK>,
+      sdk: null as any,
       error: "No wallet configured. Call configure_wallet first.",
     };
   }
   const sdk = await getAuthenticatedSDK();
   if (!sdk) {
-    return { sdk: null as ReturnType<typeof getAuthenticatedSDK>, error: "Failed to initialize authenticated SDK." };
+    return { sdk: null as any, error: "Failed to initialize authenticated SDK." };
   }
   return { sdk, error: undefined };
 }
@@ -99,7 +166,7 @@ function parseChainId(agentId: string): number {
 async function handleSendMessage(
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const { sdk, error } = requireAuth();
+  const { sdk, error } = await requireAuth();
   if (error || !sdk) return { error };
 
   const agentId = args.agentId as string;
@@ -138,7 +205,7 @@ async function handleSendMessage(
 async function handleListTasks(
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const { sdk, error } = requireAuth();
+  const { sdk, error } = await requireAuth();
   if (error || !sdk) return { error };
 
   const agentId = args.agentId as string;
@@ -163,7 +230,7 @@ async function handleListTasks(
 async function handleGetTask(
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const { sdk, error } = requireAuth();
+  const { sdk, error } = await requireAuth();
   if (error || !sdk) return { error };
 
   const agentId = args.agentId as string;
@@ -184,6 +251,99 @@ async function handleGetTask(
   };
 }
 
+async function handleQueryTask(
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const { sdk, error } = await requireAuth();
+  if (error || !sdk) return { error };
+
+  const agentId = args.agentId as string;
+  const taskId = args.taskId as string;
+  const historyLength = args.historyLength as number | undefined;
+
+  const agentSummary = await sdk.getAgent(agentId);
+  if (!agentSummary) {
+    return { error: `Agent ${agentId} not found` };
+  }
+  if (!agentSummary.a2a) {
+    return { error: `Agent ${agentId} does not have an A2A endpoint` };
+  }
+
+  const a2aClient = sdk.createA2AClient(agentSummary);
+  const task = await (a2aClient as any).queryTask(taskId, {
+    historyLength: historyLength ?? undefined,
+  });
+
+  return {
+    agentId,
+    taskId,
+    status: task?.status,
+    messages: task?.messages ?? [],
+    artifacts: task?.artifacts ?? [],
+  };
+}
+
+async function handleTaskMessage(
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const { sdk, error } = await requireAuth();
+  if (error || !sdk) return { error };
+
+  const agentId = args.agentId as string;
+  const taskId = args.taskId as string;
+  const message = args.message as string;
+
+  const agentSummary = await sdk.getAgent(agentId);
+  if (!agentSummary) {
+    return { error: `Agent ${agentId} not found` };
+  }
+  if (!agentSummary.a2a) {
+    return { error: `Agent ${agentId} does not have an A2A endpoint` };
+  }
+
+  const a2aClient = sdk.createA2AClient(agentSummary);
+  const result = await (a2aClient as any).messageA2A(message, { taskId });
+
+  const chainId = parseChainId(agentId);
+  return {
+    success: true,
+    agentId,
+    chain: getChainName(chainId),
+    taskId,
+    status: result?.status,
+    response: result?.response ?? result?.text ?? result,
+  };
+}
+
+async function handleCancelTask(
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const { sdk, error } = await requireAuth();
+  if (error || !sdk) return { error };
+
+  const agentId = args.agentId as string;
+  const taskId = args.taskId as string;
+
+  const agentSummary = await sdk.getAgent(agentId);
+  if (!agentSummary) {
+    return { error: `Agent ${agentId} not found` };
+  }
+  if (!agentSummary.a2a) {
+    return { error: `Agent ${agentId} does not have an A2A endpoint` };
+  }
+
+  const a2aClient = sdk.createA2AClient(agentSummary);
+  const result = await (a2aClient as any).cancelTask(taskId);
+
+  return {
+    success: true,
+    agentId,
+    taskId,
+    cancelled: true,
+    result: result ?? {},
+  };
+}
+
 // ============================================================================
 // DISPATCH
 // ============================================================================
@@ -199,6 +359,12 @@ export async function handleA2ATool(
       return handleListTasks(args);
     case "a2a_get_task":
       return handleGetTask(args);
+    case "a2a_query_task":
+      return handleQueryTask(args);
+    case "a2a_task_message":
+      return handleTaskMessage(args);
+    case "a2a_cancel_task":
+      return handleCancelTask(args);
     default:
       return { error: `Unknown A2A tool: ${name}` };
   }

@@ -1,6 +1,10 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { computeTrustLabel } from "../utils/trust-labels.js";
 import { getChainName, CHAINS } from "../utils/chains.js";
+import {
+  getAuthenticatedSDK,
+  hasAuthentication,
+} from "../auth/sdk-client.js";
 
 // ============================================================================
 // SDK INITIALIZATION (read-only, no private key needed)
@@ -105,6 +109,32 @@ export const discoveryTools: Tool[] = [
         hasA2A: {
           type: "boolean",
           description: "Only agents with an A2A endpoint",
+        },
+        hasWeb: {
+          type: "boolean",
+          description: "Only agents with a web endpoint",
+        },
+        hasOASF: {
+          type: "boolean",
+          description: "Only agents with OASF skills/domains",
+        },
+        owners: {
+          type: "array",
+          items: { type: "string" },
+          description: "Filter by owner wallet addresses",
+        },
+        operators: {
+          type: "array",
+          items: { type: "string" },
+          description: "Filter by operator wallet addresses",
+        },
+        registeredAtFrom: {
+          type: "string",
+          description: "Filter agents registered after this ISO date (e.g. '2025-01-01')",
+        },
+        registeredAtTo: {
+          type: "string",
+          description: "Filter agents registered before this ISO date",
         },
         chains: {
           type: "array",
@@ -226,7 +256,59 @@ export const discoveryTools: Tool[] = [
           type: "boolean",
           description: "Include revoked feedback (default: false)",
         },
+        capabilities: {
+          type: "array",
+          items: { type: "string" },
+          description: "Filter by agent capabilities mentioned in feedback",
+        },
+        skills: {
+          type: "array",
+          items: { type: "string" },
+          description: "Filter by skills mentioned in feedback",
+        },
+        first: {
+          type: "number",
+          description: "Number of results to return (pagination, default: 50)",
+        },
+        skip: {
+          type: "number",
+          description: "Number of results to skip (pagination offset)",
+        },
       },
+    },
+  },
+  {
+    name: "get_registries",
+    description:
+      "Get the ERC-8004 registry contract addresses for a specific chain. " +
+      "Returns identity, reputation, and validation contract addresses.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        chainId: {
+          type: "number",
+          description:
+            "Chain ID to query (default: 11155111 Sepolia). Use 1 for Ethereum Mainnet, 8453 for Base.",
+        },
+      },
+    },
+  },
+  {
+    name: "load_agent",
+    description:
+      "Load a full agent object by ID with updatable methods. " +
+      "Returns the complete agent data including metadata, endpoints, trust models, " +
+      "and the ability to modify the agent (requires ownership). " +
+      "More detailed than get_agent — includes raw on-chain data.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agentId: {
+          type: "string",
+          description: "Agent ID in chainId:tokenId format (e.g. '11155111:42')",
+        },
+      },
+      required: ["agentId"],
     },
   },
 ];
@@ -257,6 +339,15 @@ async function handleSearchAgents(
   if (args.x402support !== undefined) filters.x402support = args.x402support;
   if (args.hasMCP !== undefined) filters.hasMCP = args.hasMCP;
   if (args.hasA2A !== undefined) filters.hasA2A = args.hasA2A;
+  if (args.hasWeb !== undefined) filters.hasWeb = args.hasWeb;
+  if (args.hasOASF !== undefined) filters.hasOASF = args.hasOASF;
+  if (args.owners) filters.owners = args.owners;
+  if (args.operators) filters.operators = args.operators;
+  if (args.registeredAtFrom || args.registeredAtTo) {
+    filters.registeredAt = {};
+    if (args.registeredAtFrom) (filters.registeredAt as any).from = args.registeredAtFrom;
+    if (args.registeredAtTo) (filters.registeredAt as any).to = args.registeredAtTo;
+  }
   if (args.chains) filters.chains = args.chains;
   if (args.minFeedbackValue) {
     filters.feedback = {
@@ -270,7 +361,7 @@ async function handleSearchAgents(
     { sort: ["updatedAt:desc"] },
   );
 
-  const agents = results.slice(0, limit).map((a) =>
+  const agents = results.slice(0, limit).map((a: any) =>
     formatAgentSummary(a as unknown as Record<string, unknown>),
   );
 
@@ -468,15 +559,20 @@ async function handleSearchFeedback(
   const options: Record<string, unknown> = {};
   if (args.minValue !== undefined) options.minValue = args.minValue;
   if (args.maxValue !== undefined) options.maxValue = args.maxValue;
+  if (args.capabilities) filters.capabilities = args.capabilities;
+  if (args.skills) filters.skills = args.skills;
+  if (args.first !== undefined) options.first = args.first;
+  if (args.skip !== undefined) options.skip = args.skip;
 
   const feedbacks = await sdk.searchFeedback(
     filters as Parameters<typeof sdk.searchFeedback>[0],
     options as Parameters<typeof sdk.searchFeedback>[1],
   );
 
+  const resultLimit = (args.first as number) ?? 50;
   return {
     count: feedbacks.length,
-    feedbacks: feedbacks.slice(0, 50).map((f) => ({
+    feedbacks: feedbacks.slice(0, resultLimit).map((f: any) => ({
       agentId: f.agentId,
       reviewer: f.reviewer,
       value: f.value,
@@ -489,6 +585,96 @@ async function handleSearchFeedback(
       a2aSkills: f.a2aSkills,
     })),
   };
+}
+
+async function handleGetRegistries(
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const chainId = (args.chainId as number) ?? DEFAULT_CHAIN_ID;
+  const sdk = await getReadOnlySDK(chainId);
+
+  const registries = await sdk.registries();
+
+  return {
+    chainId,
+    chain: getChainName(chainId),
+    registries: {
+      identity: registries.identity ?? registries.identityRegistry,
+      reputation: registries.reputation ?? registries.reputationRegistry,
+      validation: registries.validation ?? registries.validationRegistry,
+    },
+  };
+}
+
+async function handleLoadAgent(
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const agentId = args.agentId as string;
+  if (!agentId) return { error: "agentId is required (format: chainId:tokenId)" };
+
+  const parts = agentId.split(":");
+  if (parts.length !== 2) {
+    return { error: "Invalid agentId format. Use chainId:tokenId (e.g. '11155111:42')" };
+  }
+
+  const chainId = parseInt(parts[0], 10);
+
+  // Use authenticated SDK if available (for updatable methods), otherwise read-only
+  let sdk: any;
+  if (hasAuthentication()) {
+    sdk = await getAuthenticatedSDK(chainId);
+  }
+  if (!sdk) {
+    sdk = await getReadOnlySDK(chainId);
+  }
+
+  const agent = await sdk.loadAgent(agentId);
+  if (!agent) {
+    return { error: `Agent ${agentId} not found` };
+  }
+
+  // Extract raw data from the loaded agent object
+  const data: Record<string, unknown> = {
+    agentId,
+    chain: getChainName(chainId),
+    name: agent.name,
+    description: agent.description,
+    image: agent.image,
+    active: agent.active,
+    mcp: agent.mcp ?? null,
+    a2a: agent.a2a ?? null,
+    web: agent.web ?? null,
+    ens: agent.ens ?? null,
+    x402support: agent.x402support,
+    owners: agent.owners,
+    operators: agent.operators,
+    supportedTrusts: agent.supportedTrusts,
+    mcpTools: agent.mcpTools,
+    a2aSkills: agent.a2aSkills,
+    oasfSkills: agent.oasfSkills,
+    oasfDomains: agent.oasfDomains,
+    metadata: agent.metadata ?? {},
+    registrationMethod: agent.registrationMethod,
+    tokenURI: agent.tokenURI,
+    updatedAt: agent.updatedAt,
+    registeredAt: agent.registeredAt,
+  };
+
+  // Get reputation
+  try {
+    const reputation = await sdk.getReputationSummary(agentId);
+    const trust = computeTrustLabel(reputation.count, reputation.averageValue);
+    data.reputation = {
+      count: reputation.count,
+      averageValue: reputation.averageValue,
+      trustLabel: trust.label,
+      trustDisplay: trust.display,
+    };
+  } catch {
+    data.reputation = null;
+  }
+
+  return data;
 }
 
 // ============================================================================
@@ -512,6 +698,10 @@ export async function handleDiscoveryTool(
       return handleGetReputationSummary(args);
     case "search_feedback":
       return handleSearchFeedback(args);
+    case "get_registries":
+      return handleGetRegistries(args);
+    case "load_agent":
+      return handleLoadAgent(args);
     default:
       return { error: `Unknown discovery tool: ${name}` };
   }

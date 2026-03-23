@@ -4,6 +4,7 @@ import { reputationTools, handleReputationTool } from "./reputation.js";
 import { registrationTools, handleRegistrationTool } from "./registration.js";
 import { paymentsTools, handlePaymentsTool } from "./payments.js";
 import { a2aTools, handleA2ATool } from "./a2a.js";
+import { ownershipTools, handleOwnershipTool } from "./ownership.js";
 
 // Aggregate all tool definitions
 export const TOOLS: Tool[] = [
@@ -12,6 +13,7 @@ export const TOOLS: Tool[] = [
   ...registrationTools,
   ...paymentsTools,
   ...a2aTools,
+  ...ownershipTools,
 ];
 
 // Tool name -> handler routing map
@@ -31,6 +33,9 @@ for (const tool of paymentsTools) {
 }
 for (const tool of a2aTools) {
   TOOL_HANDLERS[tool.name] = (args) => handleA2ATool(tool.name, args);
+}
+for (const tool of ownershipTools) {
+  TOOL_HANDLERS[tool.name] = (args) => handleOwnershipTool(tool.name, args);
 }
 
 export async function handleToolCall(
