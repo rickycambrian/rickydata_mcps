@@ -96,9 +96,23 @@ jobs:
 
       - name: Publish to npm
         if: steps.check.outputs.needs_update == 'true'
+        id: publish
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # NOTE: GITHUB_TOKEN cannot dispatch to a foreign repository.
+      # This step requires a PAT with `repo` scope stored as the secret
+      # DEPLOYMENTS_REGISTRY_PAT in the rickydata_mcps repository settings.
+      - name: Notify mcp_deployments_registry
+        if: steps.publish.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOYMENTS_REGISTRY_PAT }}
+        run: |
+          gh api repos/rickycambrian/mcp_deployments_registry/dispatches \
+            -f event_type=rickydata-mcps-published \
+            -f "client_payload[package]=@rickydata/agent0-mcp" \
+            -f "client_payload[version]=${{ steps.version.outputs.new_version }}"
 
       - name: Update KFDB version
         if: steps.check.outputs.needs_update == 'true'
