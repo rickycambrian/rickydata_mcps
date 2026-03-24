@@ -17,7 +17,7 @@ async function loadSDK() { return (await import("agent0-sdk")).SDK; }
 // CONFIGURATION
 // ============================================================================
 
-const DEFAULT_CHAIN_ID = parseInt(process.env.AGENT0_CHAIN_ID || "11155111", 10);
+const DEFAULT_CHAIN_ID = parseInt(process.env.AGENT0_CHAIN_ID || "1", 10);
 const RPC_URL = process.env.AGENT0_RPC_URL;
 const IPFS_PROVIDER = (process.env.AGENT0_IPFS_PROVIDER || "pinata") as
   | "pinata"

@@ -91,6 +91,7 @@ async function handleX402Request(
     body: body ? JSON.parse(body) : undefined,
   });
 
+  const isX402Required = await getX402Helper();
   if (isX402Required(result)) {
     const payment = result.x402Payment;
 
@@ -123,10 +124,19 @@ async function handleX402Request(
   }
 
   // Successful response (no 402)
+  // Guard against non-JSON responses (e.g. SSE streams) — stringify safely
+  let safeResult = result;
+  if (typeof result === 'string' && result.startsWith('event:')) {
+    return {
+      status: "error",
+      x402: false,
+      error: "Response is an SSE stream, not JSON. This endpoint does not support x402 — use a direct API endpoint instead of streaming endpoints.",
+    };
+  }
   return {
     status: "ok",
     x402: false,
-    result: result,
+    result: safeResult,
   };
 }
 
