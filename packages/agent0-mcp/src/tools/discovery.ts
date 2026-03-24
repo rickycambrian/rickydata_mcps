@@ -13,9 +13,63 @@ import {
 
 const DEFAULT_CHAIN_ID = parseInt(process.env.AGENT0_CHAIN_ID || "1", 10);
 
+// The Graph decentralized network rejects skip > 5000. For chains with many
+// agents (e.g. Ethereum mainnet with 6000+), sdk.searchAgents() fetches pages
+// until skip=6000 throws, and the SDK's fetchChain() silently swallows the
+// error and returns [] for the entire chain.
+//
+// For get_platform_stats and search_agents with no filters, we bypass the SDK
+// and use SubgraphClient directly with graceful pagination that stops at the
+// skip limit rather than failing and discarding all accumulated results.
+
 async function getReadOnlySDK(chainId?: number): Promise<any> {
   const { SDK } = await import("agent0-sdk");
   return new SDK({ chainId: chainId ?? DEFAULT_CHAIN_ID });
+}
+
+// Paginated fetch that stops gracefully when the subgraph rejects skip > 5000.
+// Returns all agents fetched before the skip limit error.
+async function fetchAllAgentsGraceful(chainId: number): Promise<any[]> {
+  let SubgraphClientClass: any;
+  let subgraphUrl: string | undefined;
+  try {
+    const agent0 = await import("agent0-sdk");
+    SubgraphClientClass = agent0.SubgraphClient;
+    subgraphUrl = (agent0.DEFAULT_SUBGRAPH_URLS as Record<number, string>)[chainId];
+  } catch {
+    // Fallback: use SDK's searchAgents directly
+    const sdk = await getReadOnlySDK(chainId);
+    return sdk.searchAgents({}, { sort: ["updatedAt:desc"] });
+  }
+
+  if (!SubgraphClientClass || !subgraphUrl) {
+    const sdk = await getReadOnlySDK(chainId);
+    return sdk.searchAgents({}, { sort: ["updatedAt:desc"] });
+  }
+
+  const client = new SubgraphClientClass(subgraphUrl);
+  const BATCH = 1000;
+  // The Graph decentralized network caps skip at 5000 (max 6000 results per query run)
+  const MAX_SKIP = 5000;
+  const all: any[] = [];
+
+  for (let skip = 0; skip <= MAX_SKIP; skip += BATCH) {
+    try {
+      const page = await client.searchAgentsV2({
+        where: { registrationFile_not: null },
+        first: BATCH,
+        skip,
+        orderBy: "updatedAt",
+        orderDirection: "desc",
+      });
+      all.push(...page);
+      if (page.length < BATCH) break; // last page
+    } catch {
+      break; // stop gracefully at skip limit
+    }
+  }
+
+  return all;
 }
 
 // ============================================================================
@@ -331,7 +385,6 @@ async function handleSearchAgents(
   );
 
   const chainId = (args.chains as number[] | undefined)?.[0] ?? DEFAULT_CHAIN_ID;
-  const sdk = await getReadOnlySDK(chainId);
 
   const filters: Record<string, unknown> = {};
   if (args.name) filters.name = args.name;
@@ -361,18 +414,34 @@ async function handleSearchAgents(
     };
   }
 
-  const results = await sdk.searchAgents(
-    filters,
-    { sort: ["updatedAt:desc"] },
+  // Determine if any subgraph-level filters are active (beyond just chain selection).
+  // When no filters are present, sdk.searchAgents fetches ALL agents which fails for
+  // chains with >6000 registrations due to The Graph's skip>5000 restriction.
+  const hasSubgraphFilters = Boolean(
+    args.name || args.keyword || args.active !== undefined ||
+    args.x402support !== undefined || args.hasMCP !== undefined ||
+    args.hasA2A !== undefined || args.hasWeb !== undefined ||
+    args.hasOASF !== undefined || args.owners || args.operators ||
+    args.mcpTools || args.a2aSkills || args.oasfSkills || args.oasfDomains ||
+    args.minFeedbackValue || args.registeredAtFrom || args.registeredAtTo
   );
 
-  const agents = results.slice(0, limit).map((a: any) =>
+  let allResults: any[];
+  if (!hasSubgraphFilters) {
+    // No filters — use graceful pagination to avoid silent failure on large chains
+    allResults = await fetchAllAgentsGraceful(chainId);
+  } else {
+    const sdk = await getReadOnlySDK(chainId);
+    allResults = await sdk.searchAgents(filters, { sort: ["updatedAt:desc"] });
+  }
+
+  const agents = allResults.slice(0, limit).map((a: any) =>
     formatAgentSummary(a as unknown as Record<string, unknown>),
   );
 
   return {
     count: agents.length,
-    totalAvailable: results.length,
+    totalAvailable: allResults.length,
     chainId,
     agents,
   };
@@ -470,10 +539,10 @@ async function handleGetPlatformStats(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   const chainId = (args.chainId as number) ?? DEFAULT_CHAIN_ID;
-  const sdk = await getReadOnlySDK(chainId);
 
-  // Fetch all agents on this chain (no filter)
-  const allAgents = await sdk.searchAgents({}, { sort: ["updatedAt:desc"] });
+  // Use graceful pagination to avoid silent empty results on chains with >6000 agents
+  // (The Graph decentralized network rejects skip > 5000, causing sdk.searchAgents to return [])
+  const allAgents = await fetchAllAgentsGraceful(chainId);
 
   let activeCount = 0;
   let mcpCount = 0;
