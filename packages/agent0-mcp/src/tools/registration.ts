@@ -194,6 +194,15 @@ async function requireAuth(): Promise<{ sdk: any; error?: string }> {
 async function handleConfigureWallet(
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  // Compatibility: enrichment schema may rename "signature" to "derivationSignature"
+  if (args.derivationSignature && !args.signature) {
+    args.signature = args.derivationSignature;
+  }
+  // Compatibility: enrichment schema may rename "signerAddress" to "walletAddress"
+  if (args.walletAddress && !args.signerAddress) {
+    args.signerAddress = args.walletAddress;
+  }
+
   // Set chain if provided
   if (args.chainId) {
     setChainId(args.chainId as number);
