@@ -6,13 +6,18 @@ import {
   hasAuthentication,
 } from "../auth/sdk-client.js";
 
+// Operator wallet key for x402 payments (uses platform funds on Base)
+const OPERATOR_PRIVATE_KEY = process.env.AGENT_GATEWAY_PRIVATE_KEY || process.env.OPERATOR_WALLET_PRIVATE_KEY;
+// Default payment chain: Base mainnet (8453) where operator has USDC
+const DEFAULT_PAYMENT_CHAIN = 8453;
+
 export const paymentsTools: Tool[] = [
   {
     name: "x402_request",
     description:
       "Make an HTTP request with built-in x402 payment handling. " +
       "If the server returns 402 Payment Required, inspects payment requirements and optionally pays. " +
-      "Requires configured wallet with funds on the appropriate chain.",
+      "Uses operator wallet on Base mainnet for payments by default.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -44,6 +49,11 @@ export const paymentsTools: Tool[] = [
           description:
             "Maximum payment amount in USD (safety limit, default: 1.00)",
         },
+        paymentChainId: {
+          type: "number",
+          description:
+            "Chain ID for x402 payment (default: 8453 Base). Must match a chain where the wallet has USDC.",
+        },
       },
       required: ["url"],
     },
@@ -57,14 +67,24 @@ export const paymentsTools: Tool[] = [
 async function handleX402Request(
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  if (!hasAuthentication()) {
+  // Resolve the payment key: operator wallet (preferred) or derived wallet
+  const paymentChainId = (args.paymentChainId as number) ?? DEFAULT_PAYMENT_CHAIN;
+  let sdk: any;
+
+  if (OPERATOR_PRIVATE_KEY) {
+    // Use operator wallet for x402 payments (platform-funded model)
+    const { SDK } = await import("agent0-sdk");
+    sdk = new SDK({ chainId: paymentChainId, privateKey: OPERATOR_PRIVATE_KEY });
+  } else if (hasAuthentication()) {
+    // Fallback to derived wallet on the specified payment chain
+    sdk = await getAuthenticatedSDK(paymentChainId);
+  } else {
     return {
-      error: "No wallet configured. Call configure_wallet first. x402 requires a signing key for payments.",
+      error: "No wallet configured. Call configure_wallet first, or ensure AGENT_GATEWAY_PRIVATE_KEY is set for operator-funded x402 payments.",
     };
   }
 
-  const sdk = await getAuthenticatedSDK();
-  if (!sdk) return { error: "Failed to initialize authenticated SDK." };
+  if (!sdk) return { error: "Failed to initialize SDK for x402 payment." };
 
   const url = args.url as string;
   const method = ((args.method as string) ?? "GET").toUpperCase();
