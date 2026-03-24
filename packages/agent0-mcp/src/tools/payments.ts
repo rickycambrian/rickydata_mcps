@@ -6,9 +6,7 @@ import {
   hasAuthentication,
 } from "../auth/sdk-client.js";
 
-// Operator wallet key for x402 payments (uses platform funds on Base)
-const OPERATOR_PRIVATE_KEY = process.env.AGENT_GATEWAY_PRIVATE_KEY || process.env.OPERATOR_WALLET_PRIVATE_KEY;
-// Default payment chain: Base mainnet (8453) where operator has USDC
+// Default payment chain: Base mainnet (8453) — most x402 agents accept USDC on Base
 const DEFAULT_PAYMENT_CHAIN = 8453;
 
 export const paymentsTools: Tool[] = [
@@ -17,7 +15,7 @@ export const paymentsTools: Tool[] = [
     description:
       "Make an HTTP request with built-in x402 payment handling. " +
       "If the server returns 402 Payment Required, inspects payment requirements and optionally pays. " +
-      "Uses operator wallet on Base mainnet for payments by default.",
+      "Requires configured wallet (via configure_wallet) with USDC on the payment chain (default: Base).",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -67,23 +65,16 @@ export const paymentsTools: Tool[] = [
 async function handleX402Request(
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  // Resolve the payment key: operator wallet (preferred) or derived wallet
+  // Use derived wallet on the payment chain (default: Base 8453 where most x402 agents accept USDC)
   const paymentChainId = (args.paymentChainId as number) ?? DEFAULT_PAYMENT_CHAIN;
-  let sdk: any;
 
-  if (OPERATOR_PRIVATE_KEY) {
-    // Use operator wallet for x402 payments (platform-funded model)
-    const { SDK } = await import("agent0-sdk");
-    sdk = new SDK({ chainId: paymentChainId, privateKey: OPERATOR_PRIVATE_KEY });
-  } else if (hasAuthentication()) {
-    // Fallback to derived wallet on the specified payment chain
-    sdk = await getAuthenticatedSDK(paymentChainId);
-  } else {
+  if (!hasAuthentication()) {
     return {
-      error: "No wallet configured. Call configure_wallet first, or ensure AGENT_GATEWAY_PRIVATE_KEY is set for operator-funded x402 payments.",
+      error: "No wallet configured. Call configure_wallet first with your wallet signature.",
     };
   }
 
+  const sdk = await getAuthenticatedSDK(paymentChainId);
   if (!sdk) return { error: "Failed to initialize SDK for x402 payment." };
 
   const url = args.url as string;
