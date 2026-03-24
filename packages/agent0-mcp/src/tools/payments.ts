@@ -1,9 +1,7 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-// Lazy import to avoid module-level init
-async function getX402Helper() { return (await import("agent0-sdk")).isX402Required; }
 import {
-  getAuthenticatedSDK,
   hasAuthentication,
+  resolvePrivateKey,
 } from "../auth/sdk-client.js";
 
 // Default payment chain: Base mainnet (8453) — most x402 agents accept USDC on Base
@@ -65,7 +63,6 @@ export const paymentsTools: Tool[] = [
 async function handleX402Request(
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  // Use derived wallet on the payment chain (default: Base 8453 where most x402 agents accept USDC)
   const paymentChainId = (args.paymentChainId as number) ?? DEFAULT_PAYMENT_CHAIN;
 
   if (!hasAuthentication()) {
@@ -74,8 +71,8 @@ async function handleX402Request(
     };
   }
 
-  const sdk = await getAuthenticatedSDK(paymentChainId);
-  if (!sdk) return { error: "Failed to initialize SDK for x402 payment." };
+  const privateKey = resolvePrivateKey();
+  if (!privateKey) return { error: "No private key available for x402 payment signing." };
 
   const url = args.url as string;
   const method = ((args.method as string) ?? "GET").toUpperCase();
@@ -84,82 +81,211 @@ async function handleX402Request(
   const headers = (args.headers as Record<string, string>) ?? {};
   const body = args.body as string | undefined;
 
-  const fetchOptions: RequestInit = {
-    method,
-    headers: { ...headers },
-  };
-  if (body && (method === "POST" || method === "PUT")) {
-    fetchOptions.body = body;
-    if (!headers["Content-Type"]) {
-      (fetchOptions.headers as Record<string, string>)["Content-Type"] = "application/json";
-    }
+  // Build fetch options
+  const fetchHeaders: Record<string, string> = { ...headers };
+  if (body && (method === "POST" || method === "PUT") && !fetchHeaders["Content-Type"]) {
+    fetchHeaders["Content-Type"] = "application/json";
   }
 
-  let result: any;
+  // Step 1: Make the initial request with plain fetch (no SDK wrapping)
+  let response: Response;
   try {
-    result = await sdk.request({
-      url,
-      method: method as "GET" | "POST" | "PUT" | "DELETE",
-      headers,
-      body: body ? JSON.parse(body) : undefined,
+    response = await fetch(url, {
+      method,
+      headers: fetchHeaders,
+      body: (method === "POST" || method === "PUT") ? body : undefined,
     });
-  } catch (reqError: unknown) {
-    const msg = reqError instanceof Error ? reqError.message : String(reqError);
+  } catch (fetchError: unknown) {
+    const msg = fetchError instanceof Error ? fetchError.message : String(fetchError);
+    return { success: false, error: msg, paymentChainId };
+  }
+
+  // Step 2: If not 402, return the response directly
+  if (response.status !== 402) {
+    if (response.ok) {
+      try {
+        const data = await response.json();
+        return { success: true, status: "ok", x402: false, result: data };
+      } catch {
+        const text = await response.text();
+        return { success: true, status: "ok", x402: false, result: text };
+      }
+    }
     return {
       success: false,
+      error: `HTTP ${response.status}: ${response.statusText}`,
+      paymentChainId,
+    };
+  }
+
+  // Step 3: Parse x402 payment requirements from 402 response
+  let x402Body: any;
+  try {
+    x402Body = await response.json();
+  } catch {
+    return { success: false, error: "402 response was not valid JSON", x402: true };
+  }
+
+  const accepts = x402Body?.accepts;
+  if (!accepts || !Array.isArray(accepts) || accepts.length === 0) {
+    return {
+      success: false,
+      error: "402 response missing accepts array",
+      x402: true,
+      raw: x402Body,
+    };
+  }
+
+  if (!autoPay) {
+    return {
+      status: "payment_required",
+      x402: true,
+      paymentDetails: {
+        accepts: accepts.map((a: any) => ({
+          network: a.network,
+          amount: a.amount,
+          asset: a.asset,
+          payTo: a.payTo,
+        })),
+        note: "Set autoPay: true to pay automatically.",
+      },
+    };
+  }
+
+  // Step 4: Find matching payment option for our chain
+  const chainNetwork = `eip155:${paymentChainId}`;
+  const match = accepts.find((a: any) => a.network === chainNetwork);
+  if (!match) {
+    const available = accepts.map((a: any) => a.network).join(", ");
+    return {
+      success: false,
+      error: `No payment option for chain ${paymentChainId}. Available: ${available}`,
+      x402: true,
+    };
+  }
+
+  // Safety check: amount in base units (USDC has 6 decimals)
+  const amountUsd = parseInt(match.amount, 10) / 1_000_000;
+  if (amountUsd > maxPaymentUsd) {
+    return {
+      success: false,
+      error: `Payment amount $${amountUsd.toFixed(4)} exceeds maxPaymentUsd $${maxPaymentUsd}`,
+      x402: true,
+    };
+  }
+
+  // Step 5: Sign x402 payment using ethers EIP-712
+  try {
+    const { ethers } = await import("ethers");
+    const wallet = new ethers.Wallet(privateKey);
+
+    // Sign EIP-712 TransferWithAuthorization for USDC
+    const usdcAddress = match.asset as string;
+    const payTo = match.payTo as string;
+    const validAfter = "0";
+    const validBefore = String(Math.floor(Date.now() / 1000) + 3600);
+    const nonce = ethers.hexlify(ethers.randomBytes(32));
+
+    const domain = {
+      name: match.extra?.name || "USD Coin",
+      version: match.extra?.version || "2",
+      chainId: paymentChainId,
+      verifyingContract: usdcAddress,
+    };
+
+    const types = {
+      TransferWithAuthorization: [
+        { name: "from", type: "address" },
+        { name: "to", type: "address" },
+        { name: "value", type: "uint256" },
+        { name: "validAfter", type: "uint256" },
+        { name: "validBefore", type: "uint256" },
+        { name: "nonce", type: "bytes32" },
+      ],
+    };
+
+    const message = {
+      from: wallet.address,
+      to: payTo,
+      value: match.amount,
+      validAfter,
+      validBefore,
+      nonce,
+    };
+
+    const signature = await wallet.signTypedData(domain, types, message);
+
+    // Build x402 payment header
+    const paymentPayload = {
+      x402Version: 2,
+      scheme: "exact",
+      network: chainNetwork,
+      payload: {
+        signature,
+        authorization: {
+          from: wallet.address,
+          to: payTo,
+          value: match.amount,
+          validAfter: "0",
+          validBefore: validBefore.toString(),
+          nonce,
+        },
+      },
+    };
+
+    const paymentHeader = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
+
+    // Step 6: Retry with payment header
+    const paidResponse = await fetch(url, {
+      method,
+      headers: {
+        ...fetchHeaders,
+        "X-PAYMENT": paymentHeader,
+      },
+      body: (method === "POST" || method === "PUT") ? body : undefined,
+    });
+
+    if (!paidResponse.ok) {
+      const errText = await paidResponse.text().catch(() => "");
+      return {
+        success: false,
+        status: "payment_rejected",
+        x402: true,
+        httpStatus: paidResponse.status,
+        error: errText || paidResponse.statusText,
+        paymentAmount: `$${amountUsd.toFixed(4)} USDC`,
+      };
+    }
+
+    let paidData: any;
+    try {
+      paidData = await paidResponse.json();
+    } catch {
+      paidData = await paidResponse.text();
+    }
+
+    return {
+      success: true,
+      status: "paid",
+      x402: true,
+      result: paidData,
+      payment: {
+        amount: `$${amountUsd.toFixed(4)} USDC`,
+        network: chainNetwork,
+        from: wallet.address,
+        to: payTo,
+      },
+    };
+  } catch (payError: unknown) {
+    const msg = payError instanceof Error ? payError.message : String(payError);
+    return {
+      success: false,
+      status: "payment_failed",
+      x402: true,
       error: msg,
       paymentChainId,
-      hint: "If the error is chain-related, ensure your derived wallet has USDC on the payment chain.",
     };
   }
-
-  const isX402Required = await getX402Helper();
-  if (isX402Required(result)) {
-    const payment = result.x402Payment;
-
-    if (!autoPay) {
-      return {
-        status: "payment_required",
-        x402: true,
-        paymentDetails: {
-          note: "Server requires x402 payment. Set autoPay: true to pay automatically.",
-        },
-      };
-    }
-
-    // Auto-pay: execute payment and retry
-    try {
-      const paidResult = await payment.pay();
-      return {
-        status: "paid",
-        x402: true,
-        result: paidResult,
-      };
-    } catch (payError: unknown) {
-      const msg = payError instanceof Error ? payError.message : String(payError);
-      return {
-        status: "payment_failed",
-        x402: true,
-        error: msg,
-      };
-    }
-  }
-
-  // Successful response (no 402)
-  // Guard against non-JSON responses (e.g. SSE streams) — stringify safely
-  let safeResult = result;
-  if (typeof result === 'string' && result.startsWith('event:')) {
-    return {
-      status: "error",
-      x402: false,
-      error: "Response is an SSE stream, not JSON. This endpoint does not support x402 — use a direct API endpoint instead of streaming endpoints.",
-    };
-  }
-  return {
-    status: "ok",
-    x402: false,
-    result: safeResult,
-  };
 }
 
 // ============================================================================

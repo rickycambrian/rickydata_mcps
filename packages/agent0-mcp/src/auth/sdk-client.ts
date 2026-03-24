@@ -40,7 +40,7 @@ let _currentChainId: number = DEFAULT_CHAIN_ID;
  * Resolve the private key from environment or stored state.
  * Returns null if no key is available (read-only mode).
  */
-function resolvePrivateKey(): string | null {
+export function resolvePrivateKey(): string | null {
   // 1. Explicit private key
   if (process.env.ERC8004_PRIVATE_KEY) {
     return process.env.ERC8004_PRIVATE_KEY;
