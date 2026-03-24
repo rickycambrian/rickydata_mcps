@@ -249,7 +249,9 @@ async function handleConfigureWallet(
       derivedAddress: derived.address,
       chainId: status.chainId,
       chain: getChainName(status.chainId),
-      note: "Derived address is your ERC-8004 agent identity. It is deterministic from your wallet signature.",
+      paymentChain: "Base (8453)",
+      note: "Derived address is your ERC-8004 agent identity. It is deterministic from your wallet signature. " +
+        "The same derived key works on all EVM chains. x402 payments use Base (chain 8453) by default.",
     };
   }
 

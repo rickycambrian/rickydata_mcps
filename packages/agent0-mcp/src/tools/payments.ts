@@ -39,7 +39,7 @@ export const paymentsTools: Tool[] = [
         autoPay: {
           type: "boolean",
           description:
-            "Automatically pay and retry on 402 (default: false). " +
+            "Automatically pay and retry on 402 (default: true). " +
             "When false, returns payment requirements for inspection.",
         },
         maxPaymentUsd: {
@@ -79,7 +79,7 @@ async function handleX402Request(
 
   const url = args.url as string;
   const method = ((args.method as string) ?? "GET").toUpperCase();
-  const autoPay = (args.autoPay as boolean) ?? false;
+  const autoPay = (args.autoPay as boolean) ?? true;
   const maxPaymentUsd = (args.maxPaymentUsd as number) ?? 1.0;
   const headers = (args.headers as Record<string, string>) ?? {};
   const body = args.body as string | undefined;
@@ -95,12 +95,23 @@ async function handleX402Request(
     }
   }
 
-  const result = await sdk.request({
-    url,
-    method: method as "GET" | "POST" | "PUT" | "DELETE",
-    headers,
-    body: body ? JSON.parse(body) : undefined,
-  });
+  let result: any;
+  try {
+    result = await sdk.request({
+      url,
+      method: method as "GET" | "POST" | "PUT" | "DELETE",
+      headers,
+      body: body ? JSON.parse(body) : undefined,
+    });
+  } catch (reqError: unknown) {
+    const msg = reqError instanceof Error ? reqError.message : String(reqError);
+    return {
+      success: false,
+      error: msg,
+      paymentChainId,
+      hint: "If the error is chain-related, ensure your derived wallet has USDC on the payment chain.",
+    };
+  }
 
   const isX402Required = await getX402Helper();
   if (isX402Required(result)) {

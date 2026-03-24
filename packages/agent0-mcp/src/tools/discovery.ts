@@ -11,7 +11,9 @@ import {
 // Lazy import to avoid module-level network calls from agent0-sdk
 // ============================================================================
 
-const DEFAULT_CHAIN_ID = parseInt(process.env.AGENT0_CHAIN_ID || "1", 10);
+// Default to Base (8453) — matches x402 payment chain. Discovery tools
+// accept chainId param to query other chains (Ethereum, Arbitrum, etc.)
+const DEFAULT_CHAIN_ID = parseInt(process.env.AGENT0_CHAIN_ID || "8453", 10);
 
 // The Graph decentralized network rejects skip > 5000. The SDK's _fetchAllAgentsV2
 // uses skip-based pagination, so for chains with >6000 agents (Ethereum mainnet
