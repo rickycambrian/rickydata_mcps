@@ -13,22 +13,22 @@ import {
 
 const DEFAULT_CHAIN_ID = parseInt(process.env.AGENT0_CHAIN_ID || "1", 10);
 
-// The Graph decentralized network rejects skip > 5000. For chains with many
-// agents (e.g. Ethereum mainnet with 6000+), sdk.searchAgents() fetches pages
-// until skip=6000 throws, and the SDK's fetchChain() silently swallows the
-// error and returns [] for the entire chain.
+// The Graph decentralized network rejects skip > 5000. The SDK's _fetchAllAgentsV2
+// uses skip-based pagination, so for chains with >6000 agents (Ethereum mainnet
+// has 10,000+), it fails on skip=6000 and the SDK's fetchChain() silently
+// swallows the error, returning [] for the entire chain.
 //
-// For get_platform_stats and search_agents with no filters, we bypass the SDK
-// and use SubgraphClient directly with graceful pagination that stops at the
-// skip limit rather than failing and discarding all accumulated results.
+// Fix: use cursor-based pagination (id_gt) which has no skip limit, allowing us
+// to retrieve all agents on any chain. Used for get_platform_stats and
+// search_agents when no filters are active.
 
 async function getReadOnlySDK(chainId?: number): Promise<any> {
   const { SDK } = await import("agent0-sdk");
   return new SDK({ chainId: chainId ?? DEFAULT_CHAIN_ID });
 }
 
-// Paginated fetch that stops gracefully when the subgraph rejects skip > 5000.
-// Returns all agents fetched before the skip limit error.
+// Cursor-based full fetch that bypasses The Graph's skip > 5000 limit.
+// Returns ALL agents with registrationFile on the given chain.
 async function fetchAllAgentsGraceful(chainId: number): Promise<any[]> {
   let SubgraphClientClass: any;
   let subgraphUrl: string | undefined;
@@ -37,7 +37,6 @@ async function fetchAllAgentsGraceful(chainId: number): Promise<any[]> {
     SubgraphClientClass = agent0.SubgraphClient;
     subgraphUrl = (agent0.DEFAULT_SUBGRAPH_URLS as Record<number, string>)[chainId];
   } catch {
-    // Fallback: use SDK's searchAgents directly
     const sdk = await getReadOnlySDK(chainId);
     return sdk.searchAgents({}, { sort: ["updatedAt:desc"] });
   }
@@ -49,27 +48,92 @@ async function fetchAllAgentsGraceful(chainId: number): Promise<any[]> {
 
   const client = new SubgraphClientClass(subgraphUrl);
   const BATCH = 1000;
-  // The Graph decentralized network caps skip at 5000 (max 6000 results per query run)
-  const MAX_SKIP = 5000;
-  const all: any[] = [];
 
-  for (let skip = 0; skip <= MAX_SKIP; skip += BATCH) {
+  // Cursor-based query — id_gt avoids skip limit entirely.
+  // Order by id asc so the cursor is always the last returned id.
+  const CURSOR_QUERY = `
+    query AgentsCursor($first: Int!, $afterId: String!) {
+      agents(
+        first: $first
+        orderBy: id
+        orderDirection: asc
+        where: { registrationFile_not: null, id_gt: $afterId }
+      ) {
+        id
+        chainId
+        agentId
+        owner
+        operators
+        agentURI
+        agentURIType
+        agentWallet
+        createdAt
+        updatedAt
+        totalFeedback
+        lastActivity
+        registrationFile {
+          id
+          agentId
+          name
+          description
+          image
+          active
+          x402Support
+          supportedTrusts
+          mcpEndpoint
+          mcpVersion
+          a2aEndpoint
+          a2aVersion
+          webEndpoint
+          emailEndpoint
+          hasOASF
+          oasfSkills
+          oasfDomains
+          ens
+          did
+          mcpTools
+          mcpPrompts
+          mcpResources
+          a2aSkills
+        }
+      }
+    }`;
+
+  // Compatibility: some subgraphs (e.g. Sepolia) don't have hasOASF in the schema.
+  // The SubgraphClient already handles hasOASF in selection set via its own shim,
+  // but we're doing raw queries here so apply the same fallback.
+  async function fetchPage(afterId: string): Promise<any[]> {
     try {
-      const page = await client.searchAgentsV2({
-        where: { registrationFile_not: null },
-        first: BATCH,
-        skip,
-        orderBy: "updatedAt",
-        orderDirection: "desc",
-      });
-      all.push(...page);
-      if (page.length < BATCH) break; // last page
-    } catch {
-      break; // stop gracefully at skip limit
+      const data = await client.query(CURSOR_QUERY, { first: BATCH, afterId });
+      return data.agents || [];
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      if (msg.includes('hasOASF')) {
+        const fallbackQuery = CURSOR_QUERY.replace(/\s+hasOASF\b/g, '');
+        const data = await client.query(fallbackQuery, { first: BATCH, afterId });
+        return data.agents || [];
+      }
+      throw err;
     }
   }
 
-  return all;
+  const all: any[] = [];
+  let afterId = '';
+  for (;;) {
+    const page = await fetchPage(afterId);
+    all.push(...page);
+    if (page.length < BATCH) break;
+    afterId = page[page.length - 1].id;
+  }
+
+  // Transform raw subgraph agents to AgentSummary format using the SDK's own
+  // SubgraphClient._transformAgent method, which normalises all field names.
+  try {
+    return all.map((a: any) => (client as any)._transformAgent(a));
+  } catch {
+    // If _transformAgent is unavailable, return raw data (callers handle both).
+    return all;
+  }
 }
 
 // ============================================================================
