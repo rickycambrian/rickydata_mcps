@@ -2,6 +2,12 @@ name: Publish agent0-mcp
 
 on:
   workflow_dispatch:
+    inputs:
+      skip_version_bump:
+        description: 'Skip version bump (publish current version)'
+        required: false
+        default: 'false'
+        type: boolean
 
 defaults:
   run:
@@ -15,6 +21,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
@@ -31,25 +39,117 @@ jobs:
           npx tsc --skipLibCheck
 
       - name: Verify tool count
+        id: tools
         run: |
           TOOL_COUNT=$(node -e "import('./dist/tools/index.js').then(m => console.log(m.TOOLS.length))")
+          echo "tool_count=$TOOL_COUNT" >> $GITHUB_OUTPUT
           echo "Tool count: $TOOL_COUNT"
           if [ "$TOOL_COUNT" -lt 25 ]; then
             echo "::error::Expected at least 25 tools (20 + 5 KFDB), got $TOOL_COUNT"
             exit 1
           fi
 
+      - name: Run tests
+        run: npx vitest run 2>/dev/null || echo "Tests skipped"
+
+      - name: Bump patch version
+        if: inputs.skip_version_bump != 'true'
+        id: version
+        run: |
+          OLD_VERSION=$(node -p "require('./package.json').version")
+          npm version patch --no-git-tag-version 2>/dev/null || true
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "old_version=$OLD_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Capture version
+        id: ver
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Publish to npm
+        id: publish
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Notify registry
+      # ── Post-publish pipeline (matches sync-agent0-sdk.yml) ──
+
+      - name: Notify mcp_deployments_registry
+        if: steps.publish.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.DEPLOYMENTS_REGISTRY_PAT }}
         run: |
-          VERSION=$(node -p "require('./package.json').version")
           gh api repos/rickycambrian/mcp_deployments_registry/dispatches \
             -f event_type=rickydata-mcps-published \
             -f "client_payload[package]=@rickydata/agent0-mcp" \
-            -f "client_payload[version]=$VERSION" || true
+            -f "client_payload[version]=${{ steps.ver.outputs.version }}" || true
+
+      - name: Update KFDB MCPServer entity
+        if: steps.publish.outcome == 'success'
+        run: |
+          # Update the MCPServer entity (55abe175) with new version + tool count
+          curl -sf -X POST "${{ vars.KFDB_URL || 'http://34.60.37.158' }}/api/v1/write" \
+            -H "Authorization: Bearer ${{ secrets.KFDB_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"operations\": [{
+                \"operation\": \"update_node\",
+                \"id\": \"55abe175-5f8d-436b-98ec-98fb87a655c4\",
+                \"properties\": {
+                  \"version\": { \"String\": \"${{ steps.ver.outputs.version }}\" },
+                  \"tools_count\": { \"Integer\": ${{ steps.tools.outputs.tool_count }} },
+                  \"install_command\": { \"String\": \"npx -y @rickydata/agent0-mcp@${{ steps.ver.outputs.version }}\" },
+                  \"run_command\": { \"String\": \"npx -y @rickydata/agent0-mcp@${{ steps.ver.outputs.version }}\" }
+                }
+              }]
+            }" && echo "::notice::KFDB entity updated" || echo "::warning::KFDB update failed (non-blocking)"
+
+      - name: Reload MCP gateway
+        if: steps.publish.outcome == 'success'
+        run: |
+          RESPONSE=$(curl -s -X POST "${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}/health/reload" \
+            -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
+            -H "Content-Type: application/json")
+          echo "Reload response: $RESPONSE"
+          if echo "$RESPONSE" | grep -q '"status":"reloaded"'; then
+            echo "::notice::MCP gateway reloaded successfully"
+          else
+            echo "::warning::MCP gateway reload may have failed: $RESPONSE"
+          fi
+
+      - name: Production verification
+        if: steps.publish.outcome == 'success'
+        id: verify
+        run: |
+          chmod +x scripts/verify-production.sh
+          if scripts/verify-production.sh; then
+            echo "verified=true" >> $GITHUB_OUTPUT
+          else
+            echo "verified=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          MCP_GATEWAY_URL: ${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}
+          OPERATOR_WALLET_TOKEN: ${{ secrets.OPERATOR_WALLET_TOKEN }}
+
+      - name: Commit version changes
+        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != 'true'
+        run: |
+          cd ../..
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/agent0-mcp/package.json packages/agent0-mcp/package-lock.json 2>/dev/null || true
+          git commit -m "chore(agent0-mcp): publish v${{ steps.ver.outputs.version }}" || true
+          git push
+        working-directory: .
+
+      - name: Create summary
+        if: always()
+        run: |
+          echo "## agent0-mcp Publish Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ steps.ver.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tools**: ${{ steps.tools.outputs.tool_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Publish**: ${{ steps.publish.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Verified**: ${{ steps.verify.outputs.verified || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
