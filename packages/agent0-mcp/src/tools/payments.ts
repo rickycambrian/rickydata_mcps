@@ -7,8 +7,8 @@ import {
 let _X402Client: any = null;
 async function getX402Client(): Promise<any> {
   if (!_X402Client) {
-    const mod = await import("rickydata");
-    _X402Client = mod.X402Client;
+    const mod = await import("rickydata") as any;
+    _X402Client = mod.X402Client ?? mod.default?.X402Client;
   }
   return _X402Client;
 }
