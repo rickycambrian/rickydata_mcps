@@ -54,9 +54,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.check.outputs.needs_update == 'true'
-        run: |
-          cd ../..
-          npm install
+        run: npm install
         working-directory: .
 
       - name: Update agent0-sdk dependency
