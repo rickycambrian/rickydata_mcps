@@ -135,14 +135,13 @@ jobs:
 
       - name: Commit version changes
         if: steps.publish.outcome == 'success' && inputs.skip_version_bump != 'true'
+        working-directory: .
         run: |
-          cd ../..
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add packages/agent0-mcp/package.json packages/agent0-mcp/package-lock.json 2>/dev/null || true
           git commit -m "chore(agent0-mcp): publish v${{ steps.ver.outputs.version }}" || true
           git push
-        working-directory: .
 
       - name: Create summary
         if: always()
