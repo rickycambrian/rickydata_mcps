@@ -3,6 +3,11 @@
   "version": "0.10.2",
   "private": false,
   "description": "MCP server wrapping Agent0 SDK for ERC-8004 trustless agent operations",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rickycambrian/rickydata_mcps",
+    "directory": "packages/agent0-mcp"
+  },
   "type": "module",
   "main": "dist/index.js",
   "bin": {
