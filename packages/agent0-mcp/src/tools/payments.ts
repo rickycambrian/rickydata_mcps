@@ -3,7 +3,15 @@ import {
   hasAuthentication,
   resolvePrivateKey,
 } from "../auth/sdk-client.js";
-import { X402Client } from "rickydata";
+// X402Client loaded lazily to avoid import failures in CI where rickydata may be incomplete
+let _X402Client: any = null;
+async function getX402Client(): Promise<any> {
+  if (!_X402Client) {
+    const mod = await import("rickydata");
+    _X402Client = mod.X402Client;
+  }
+  return _X402Client;
+}
 
 // Default payment chain: Base mainnet (8453) — most x402 agents accept USDC on Base
 const DEFAULT_PAYMENT_CHAIN = 8453;
@@ -82,6 +90,8 @@ async function handleX402Request(
   const headers = (args.headers as Record<string, string>) ?? {};
   const body = args.body as string | undefined;
 
+  const X402Client = await getX402Client();
+  if (!X402Client) return { error: "X402Client not available — rickydata SDK may need updating." };
   const client = new X402Client(privateKey, { chainId: paymentChainId, maxPaymentUsd });
 
   try {
