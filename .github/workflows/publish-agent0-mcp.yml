@@ -1,0 +1,55 @@
+name: Publish agent0-mcp
+
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: packages/agent0-mcp
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install root dependencies
+        run: npm install
+        working-directory: .
+
+      - name: Build
+        run: |
+          rm -rf dist
+          npx tsc --skipLibCheck
+
+      - name: Verify tool count
+        run: |
+          TOOL_COUNT=$(node -e "import('./dist/tools/index.js').then(m => console.log(m.TOOLS.length))")
+          echo "Tool count: $TOOL_COUNT"
+          if [ "$TOOL_COUNT" -lt 25 ]; then
+            echo "::error::Expected at least 25 tools (20 + 5 KFDB), got $TOOL_COUNT"
+            exit 1
+          fi
+
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Notify registry
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOYMENTS_REGISTRY_PAT }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          gh api repos/rickycambrian/mcp_deployments_registry/dispatches \
+            -f event_type=rickydata-mcps-published \
+            -f "client_payload[package]=@rickydata/agent0-mcp" \
+            -f "client_payload[version]=$VERSION" || true
