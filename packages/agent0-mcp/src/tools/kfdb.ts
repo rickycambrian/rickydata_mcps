@@ -57,14 +57,24 @@ async function kfdbLabels(): Promise<KfdbLabelsResponse> {
 
 async function kfdbKQL(query: string): Promise<Record<string, unknown>[]> {
   if (!KFDB_API_KEY) {
-    throw new Error("KFDB_API_KEY required for KQL queries");
+    throw new Error(
+      "KFDB_API_KEY not configured. Configure it as a secret for this MCP server " +
+      "in the marketplace, or set KFDB_API_KEY environment variable."
+    );
   }
   const res = await kfdbFetch("/api/v1/query", {
     method: "POST",
     body: JSON.stringify({ query }),
   });
   if (!res.ok) {
-    throw new Error(`KFDB KQL error: ${res.status} ${await res.text()}`);
+    const text = await res.text();
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        `KFDB auth failed (${res.status}). The KFDB_API_KEY may be invalid or expired. ` +
+        `Update it in the MCP server secrets.`
+      );
+    }
+    throw new Error(`KFDB KQL error: ${res.status} ${text}`);
   }
   const result = (await res.json()) as { data?: Record<string, unknown>[] };
   return result.data ?? [];
