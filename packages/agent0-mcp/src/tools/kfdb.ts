@@ -85,6 +85,20 @@ async function kfdbKQL(query: string): Promise<Record<string, unknown>[]> {
   return result.data ?? [];
 }
 
+async function kfdbBatchEntities(
+  ids: { id: string; label: string }[],
+): Promise<Record<string, Record<string, unknown>>> {
+  if (ids.length === 0) return {};
+  // Cap at 100 IDs per batch (KFDB limit)
+  const res = await kfdbFetch("/api/v1/entities/batch", {
+    method: "POST",
+    body: JSON.stringify({ entities: ids.slice(0, 100) }),
+  });
+  if (!res.ok) return {};
+  const data = (await res.json()) as { entities?: Record<string, Record<string, unknown>> };
+  return data.entities ?? {};
+}
+
 async function kfdbSemanticSearch(
   query: string,
   limit = 10,
@@ -159,6 +173,17 @@ function extractKqlNode(row: Record<string, unknown>, alias = "n"): Record<strin
   return null;
 }
 
+// Extract a numeric count from KQL aggregate result (handles alias bug where key is "count" not alias)
+function extractCount(rows: Record<string, unknown>[]): number {
+  if (!rows || rows.length === 0) return 0;
+  const row = rows[0];
+  for (const val of Object.values(row)) {
+    const n = unwrap(val);
+    if (typeof n === "number") return n;
+  }
+  return 0;
+}
+
 // ============================================================================
 // RESPONSE FORMATTERS
 // ============================================================================
@@ -221,7 +246,7 @@ export const kfdbTools: Tool[] = [
   {
     name: "kfdb_search_agents",
     description:
-      "Search 131K+ ERC-8004 agents indexed in KFDB by name, description, or chain. " +
+      "Search 133K+ ERC-8004 agents indexed in KFDB by name, description, or chain. " +
       "Uses semantic search when available, falls back to text matching. " +
       "Returns agents with trust labels and rich metadata from the knowledge graph.",
     inputSchema: {
@@ -272,7 +297,7 @@ export const kfdbTools: Tool[] = [
     description:
       "Find agents similar to a given agent or description using KFDB semantic search. " +
       "Provide either an agent_id (looks up its description) or a free-text description. " +
-      "Returns ranked similar agents from the 131K+ indexed agents.",
+      "Returns ranked similar agents from the 133K+ indexed agents.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -361,31 +386,25 @@ async function handleSearchAgents(args: Record<string, unknown>): Promise<string
       .filter(Boolean) as string[];
 
     if (agentUuids.length > 0) {
-      // Batch-fetch agent details via KQL
-      const uuidList = agentUuids.slice(0, limit).map((u) => `'${u}'`).join(", ");
-      try {
-        const rows = await kfdbKQL(
-          `MATCH (n:ERC8004Agent) WHERE n._id IN [${uuidList}] RETURN ${AGENT_FIELDS} LIMIT ${limit}`,
-        );
-        let agents = rows.map((r) => extractKqlNode(r)).filter(Boolean) as Record<string, unknown>[];
+      // Batch-fetch agent details via batch entity resolution endpoint
+      const batchReq = agentUuids.slice(0, limit).map((id) => ({ id, label: "ERC8004Agent" }));
+      const resolved = await kfdbBatchEntities(batchReq);
+      let agents = Object.values(resolved).filter(Boolean) as Record<string, unknown>[];
 
-        if (chainFilter) agents = agents.filter((a) => a.chain_id === chainFilter);
-        if (activeOnly) agents = agents.filter((a) => a.active === true);
+      if (chainFilter) agents = agents.filter((a) => a.chain_id === chainFilter);
+      if (activeOnly) agents = agents.filter((a) => a.active === true);
 
-        if (agents.length > 0) {
-          const lines = [
-            `# KFDB Agent Search: "${query}"`,
-            `**Source**: Semantic search (embedding similarity)`,
-            `**Results**: ${agents.length} agents\n`,
-          ];
-          for (const agent of agents.slice(0, limit)) {
-            lines.push(formatAgent(agent));
-            lines.push("");
-          }
-          return lines.join("\n");
+      if (agents.length > 0) {
+        const lines = [
+          `# KFDB Agent Search: "${query}"`,
+          `**Source**: Semantic search (embedding similarity)`,
+          `**Results**: ${agents.length} agents\n`,
+        ];
+        for (const agent of agents.slice(0, limit)) {
+          lines.push(formatAgent(agent));
+          lines.push("");
         }
-      } catch {
-        // KQL IN may not be supported — fall through to entity scan
+        return lines.join("\n");
       }
     }
   }
@@ -417,7 +436,7 @@ async function handleSearchAgents(args: Record<string, unknown>): Promise<string
 
   if (matches.length === 0) {
     return `# KFDB Agent Search: "${query}"\n\nNo agents found matching "${query}". ` +
-      `Try a broader term or different chain_id. KFDB has 131K+ agents across 9 chains.`;
+      `Try a broader term or different chain_id. KFDB has 133K+ agents across 9 chains.`;
   }
 
   const lines = [
@@ -521,31 +540,26 @@ async function handleFindSimilar(args: Record<string, unknown>): Promise<string>
       .filter(Boolean) as string[];
 
     if (agentUuids.length > 0) {
-      const uuidList = agentUuids.slice(0, limit + 3).map((u) => `'${u}'`).join(", ");
-      try {
-        const rows = await kfdbKQL(
-          `MATCH (n:ERC8004Agent) WHERE n._id IN [${uuidList}] RETURN ${AGENT_FIELDS} LIMIT ${limit + 3}`,
-        );
-        let agents = rows.map((r) => extractKqlNode(r)).filter(Boolean) as Record<string, unknown>[];
-        if (agentId) agents = agents.filter((a) => a.agent_id !== agentId);
-        agents = agents.slice(0, limit);
+      // Batch-fetch agent details via batch entity resolution endpoint
+      const batchReq = agentUuids.slice(0, limit + 3).map((id) => ({ id, label: "ERC8004Agent" }));
+      const resolved = await kfdbBatchEntities(batchReq);
+      let agents = Object.values(resolved).filter(Boolean) as Record<string, unknown>[];
+      if (agentId) agents = agents.filter((a) => a.agent_id !== agentId);
+      agents = agents.slice(0, limit);
 
-        if (agents.length > 0) {
-          const lines = [
-            `# Similar Agents`,
-            agentId ? `**Reference**: ${agentId}` : `**Query**: "${description.slice(0, 100)}"`,
-            `**Source**: Semantic similarity (embeddings)`,
-            `**Results**: ${agents.length}\n`,
-          ];
-          for (let i = 0; i < agents.length; i++) {
-            lines.push(`### ${i + 1}. Match`);
-            lines.push(formatAgent(agents[i]));
-            lines.push("");
-          }
-          return lines.join("\n");
+      if (agents.length > 0) {
+        const lines = [
+          `# Similar Agents`,
+          agentId ? `**Reference**: ${agentId}` : `**Query**: "${description.slice(0, 100)}"`,
+          `**Source**: Semantic similarity (embeddings)`,
+          `**Results**: ${agents.length}\n`,
+        ];
+        for (let i = 0; i < agents.length; i++) {
+          lines.push(`### ${i + 1}. Match`);
+          lines.push(formatAgent(agents[i]));
+          lines.push("");
         }
-      } catch {
-        // Fall through to keyword search
+        return lines.join("\n");
       }
     }
   }
@@ -612,36 +626,41 @@ async function handleEcosystemStats(args: Record<string, unknown>): Promise<stri
     `- **Chains**: ${(labelMap.get("ERC8004Chain") ?? 0).toLocaleString()}`,
   ];
 
+  // Use KQL COUNT with Integer WHERE for accurate per-chain counts (not sampling)
+  const chainIds = [1, 8453, 137, 42161, 56, 10, 43114, 100, 42220];
+
   if (chainFilter !== undefined) {
-    // Use entity scan for chain-specific stats (limited sample)
-    const data = await kfdbEntities("ERC8004Agent", 2000, 0);
-    let chainAgents = 0, activeAgents = 0, withEndpoint = 0, totalFb = 0;
-    for (const agent of data.items) {
-      if (agent.chain_id !== chainFilter) continue;
-      chainAgents++;
-      if (agent.active === true) activeAgents++;
-      if (agent.has_real_endpoint === true) withEndpoint++;
-      totalFb += (agent.total_feedback as number) ?? 0;
-    }
+    // Single chain stats
+    const rows = await kfdbKQL(
+      `MATCH (n:ERC8004Agent) WHERE n.chain_id = ${chainFilter} RETURN COUNT(n) AS total`,
+    );
+    const chainAgents = extractCount(rows);
     lines.push("");
     lines.push(`## ${getChainName(chainFilter)} (Chain ${chainFilter})`);
-    lines.push(`- **Agents**: ${chainAgents.toLocaleString()} (from sample of ${data.items.length})`);
-    lines.push(`- **Active**: ${activeAgents.toLocaleString()}`);
-    lines.push(`- **With Real Endpoints**: ${withEndpoint.toLocaleString()}`);
-    lines.push(`- **Total Feedback**: ${totalFb.toLocaleString()}`);
+    lines.push(`- **Agents**: ${chainAgents.toLocaleString()}`);
   } else {
-    const data = await kfdbEntities("ERC8004Agent", 2000, 0);
-    const chainCounts = new Map<number, number>();
-    for (const agent of data.items) {
-      const chain = agent.chain_id as number;
-      chainCounts.set(chain, (chainCounts.get(chain) ?? 0) + 1);
-    }
+    // All chains — parallel KQL COUNT queries
+    const totalAgents = labelMap.get("ERC8004Agent") ?? 0;
+    const countResults = await Promise.all(
+      chainIds.map(async (chainId) => {
+        try {
+          const rows = await kfdbKQL(
+            `MATCH (n:ERC8004Agent) WHERE n.chain_id = ${chainId} RETURN COUNT(n) AS total`,
+          );
+          return [chainId, extractCount(rows)] as [number, number];
+        } catch {
+          return [chainId, 0] as [number, number];
+        }
+      }),
+    );
+    const chainCounts = countResults.filter(([, count]) => count > 0);
+    chainCounts.sort((a, b) => b[1] - a[1]);
+
     lines.push("");
-    lines.push(`## Chain Distribution (sample of ${data.items.length})`);
-    const sorted = [...chainCounts.entries()].sort((a, b) => b[1] - a[1]);
-    for (const [chain, count] of sorted) {
-      const pct = ((count / data.items.length) * 100).toFixed(1);
-      lines.push(`- **${getChainName(chain)}** (${chain}): ${count} (${pct}%)`);
+    lines.push(`## Chain Distribution`);
+    for (const [chain, count] of chainCounts) {
+      const pct = totalAgents > 0 ? ((count / totalAgents) * 100).toFixed(1) : "0.0";
+      lines.push(`- **${getChainName(chain)}** (${chain}): ${count.toLocaleString()} (${pct}%)`);
     }
   }
 
