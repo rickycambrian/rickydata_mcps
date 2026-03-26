@@ -98,6 +98,17 @@ async function kfdbSemanticSearch(
 }
 
 // ============================================================================
+// KQL PROJECTION FIELDS
+// ============================================================================
+
+// IMPORTANT: KQL `RETURN n` goes to ScyllaDB filtered scan (per-tenant keyspace).
+// KQL `RETURN n.field1, n.field2` goes to ClickHouse pushdown (global data).
+// For KFDB API keys that resolve to a non-default tenant, `RETURN n` returns
+// empty results. Always use explicit projections to ensure ClickHouse path.
+const AGENT_FIELDS = "n._id, n.name, n.description, n.agent_id, n.chain_id, n.trust_label, n.trust_emoji, n.total_feedback, n.active, n.owner, n.agent_wallet, n.web_endpoint, n.image, n.has_real_endpoint, n.oasf_skills, n.oasf_domains, n.supported_trusts, n.x402_support, n.service_types, n.updated_at, n.created_at";
+const FEEDBACK_FIELDS = "n._id, n.agent_id, n.feedback_id, n.value, n.tag1, n.tag2, n.client_address, n.endpoint, n.is_revoked, n.created_at, n.chain_id";
+
+// ============================================================================
 // PROPERTY UNWRAPPING
 // ============================================================================
 
@@ -128,14 +139,23 @@ function unwrapProps(props: Record<string, unknown>): Record<string, unknown> {
   return result;
 }
 
-// Extract a flat agent object from KQL row: {n: {Object: {...}}}
+// Extract a flat object from KQL row.
+// Projections return: {name: {String:"X"}, chain_id: {Integer:1}} (flat, no n. prefix)
+// RETURN n returns: {n: {Object: {...}}} (wrapped)
 function extractKqlNode(row: Record<string, unknown>, alias = "n"): Record<string, unknown> | null {
+  // Check for wrapped format: {n: {Object: {...}}}
   const wrapper = row[alias] as Record<string, unknown> | undefined;
-  if (!wrapper) return null;
-  if ("Object" in wrapper) {
+  if (wrapper && "Object" in wrapper) {
     return unwrapProps(wrapper.Object as Record<string, unknown>);
   }
-  return unwrapProps(wrapper);
+  if (wrapper && typeof wrapper === "object") {
+    return unwrapProps(wrapper);
+  }
+  // Projection format: flat fields directly on row
+  if (Object.keys(row).length > 0 && !wrapper) {
+    return unwrapProps(row);
+  }
+  return null;
 }
 
 // ============================================================================
@@ -340,7 +360,7 @@ async function handleSearchAgents(args: Record<string, unknown>): Promise<string
       const uuidList = agentUuids.slice(0, limit).map((u) => `'${u}'`).join(", ");
       try {
         const rows = await kfdbKQL(
-          `MATCH (n:ERC8004Agent) WHERE n._id IN [${uuidList}] RETURN n LIMIT ${limit}`,
+          `MATCH (n:ERC8004Agent) WHERE n._id IN [${uuidList}] RETURN ${AGENT_FIELDS} LIMIT ${limit}`,
         );
         let agents = rows.map((r) => extractKqlNode(r)).filter(Boolean) as Record<string, unknown>[];
 
@@ -412,9 +432,9 @@ async function handleGetAgentDetails(args: Record<string, unknown>): Promise<str
   if (!agentId) return "Error: agent_id is required (format: chainId:tokenId)";
   if (!agentId.includes(":")) return "Error: agent_id must be in chainId:tokenId format (e.g. '8453:123')";
 
-  // Use KQL for O(1) lookup instead of scanning 131K agents
+  // Use KQL with ClickHouse-pushdown projections (RETURN n goes to ScyllaDB per-tenant keyspace)
   const rows = await kfdbKQL(
-    `MATCH (n:ERC8004Agent) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN n LIMIT 1`,
+    `MATCH (n:ERC8004Agent) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN ${AGENT_FIELDS} LIMIT 1`,
   );
 
   const agent = rows.length > 0 ? extractKqlNode(rows[0]) : null;
@@ -427,7 +447,7 @@ async function handleGetAgentDetails(args: Record<string, unknown>): Promise<str
   // Get feedback summary via KQL (fast targeted query)
   try {
     const fbRows = await kfdbKQL(
-      `MATCH (n:ERC8004Feedback) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN n LIMIT 50`,
+      `MATCH (n:ERC8004Feedback) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN ${FEEDBACK_FIELDS} LIMIT 50`,
     );
     const feedbacks = fbRows.map((r) => extractKqlNode(r)).filter(Boolean) as Record<string, unknown>[];
 
@@ -472,7 +492,7 @@ async function handleFindSimilar(args: Record<string, unknown>): Promise<string>
   // If agent_id given, look up its description via KQL
   if (agentId && !description) {
     const rows = await kfdbKQL(
-      `MATCH (n:ERC8004Agent) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN n LIMIT 1`,
+      `MATCH (n:ERC8004Agent) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN ${AGENT_FIELDS} LIMIT 1`,
     );
     const agent = rows.length > 0 ? extractKqlNode(rows[0]) : null;
     if (!agent) {
@@ -499,7 +519,7 @@ async function handleFindSimilar(args: Record<string, unknown>): Promise<string>
       const uuidList = agentUuids.slice(0, limit + 3).map((u) => `'${u}'`).join(", ");
       try {
         const rows = await kfdbKQL(
-          `MATCH (n:ERC8004Agent) WHERE n._id IN [${uuidList}] RETURN n LIMIT ${limit + 3}`,
+          `MATCH (n:ERC8004Agent) WHERE n._id IN [${uuidList}] RETURN ${AGENT_FIELDS} LIMIT ${limit + 3}`,
         );
         let agents = rows.map((r) => extractKqlNode(r)).filter(Boolean) as Record<string, unknown>[];
         if (agentId) agents = agents.filter((a) => a.agent_id !== agentId);
@@ -633,7 +653,7 @@ async function handleFeedbackAnalysis(args: Record<string, unknown>): Promise<st
 
   // Use KQL for targeted feedback lookup instead of scanning 106K entries
   const rows = await kfdbKQL(
-    `MATCH (n:ERC8004Feedback) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN n LIMIT ${limit}`,
+    `MATCH (n:ERC8004Feedback) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN ${FEEDBACK_FIELDS} LIMIT ${limit}`,
   );
   const feedbacks = rows.map((r) => extractKqlNode(r)).filter(Boolean) as Record<string, unknown>[];
 
