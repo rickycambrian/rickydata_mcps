@@ -47,18 +47,6 @@ async function kfdbEntities(
   return res.json() as Promise<KfdbEntityResponse>;
 }
 
-async function kfdbEntityById(
-  label: string,
-  uuid: string,
-): Promise<Record<string, unknown> | null> {
-  const res = await kfdbFetch(`/api/v1/entities/${label}/${uuid}`);
-  if (res.status === 404 || res.status === 400) return null;
-  if (!res.ok) {
-    throw new Error(`KFDB entity API error: ${res.status} ${await res.text()}`);
-  }
-  return res.json() as Promise<Record<string, unknown>>;
-}
-
 async function kfdbLabels(): Promise<KfdbLabelsResponse> {
   const res = await kfdbFetch("/api/v1/entities/labels");
   if (!res.ok) {
@@ -67,7 +55,7 @@ async function kfdbLabels(): Promise<KfdbLabelsResponse> {
   return res.json() as Promise<KfdbLabelsResponse>;
 }
 
-async function kfdbKQL(query: string): Promise<unknown> {
+async function kfdbKQL(query: string): Promise<Record<string, unknown>[]> {
   if (!KFDB_API_KEY) {
     throw new Error("KFDB_API_KEY required for KQL queries");
   }
@@ -78,69 +66,100 @@ async function kfdbKQL(query: string): Promise<unknown> {
   if (!res.ok) {
     throw new Error(`KFDB KQL error: ${res.status} ${await res.text()}`);
   }
-  return res.json();
+  const result = (await res.json()) as { data?: Record<string, unknown>[] };
+  return result.data ?? [];
 }
 
 async function kfdbSemanticSearch(
   query: string,
-  label: string,
   limit = 10,
 ): Promise<Record<string, unknown>[] | null> {
   const res = await kfdbFetch("/api/v1/semantic/search", {
     method: "POST",
-    body: JSON.stringify({ query, label, limit }),
+    body: JSON.stringify({ query, limit, min_similarity: 0.5 }),
   });
   if (!res.ok) return null; // HNSW may not be ready
   const data = (await res.json()) as { results?: Record<string, unknown>[] };
   return data.results ?? null;
 }
 
-async function kfdbEgoGraph(
-  label: string,
-  id: string,
-  depth = 1,
-): Promise<Record<string, unknown> | null> {
-  const res = await kfdbFetch(
-    `/api/v1/ego-graph/${label}/${encodeURIComponent(id)}?depth=${depth}`,
-  );
-  if (!res.ok) return null;
-  return res.json() as Promise<Record<string, unknown>>;
+// ============================================================================
+// PROPERTY UNWRAPPING
+// ============================================================================
+
+// KQL returns typed wrappers: {String: "val"}, {Integer: 42}, {Boolean: true}
+// Entity API returns flat values. This function normalizes both.
+function unwrap(val: unknown): unknown {
+  if (val === null || val === undefined) return val;
+  if (typeof val !== "object") return val;
+  const obj = val as Record<string, unknown>;
+  if ("String" in obj) return obj.String;
+  if ("Integer" in obj) return obj.Integer;
+  if ("Float" in obj) return obj.Float;
+  if ("Boolean" in obj) return obj.Boolean;
+  if ("Array" in obj) {
+    return (obj.Array as unknown[]).map(unwrap);
+  }
+  if ("Object" in obj) {
+    return unwrapProps(obj.Object as Record<string, unknown>);
+  }
+  return val;
+}
+
+function unwrapProps(props: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(props)) {
+    result[key] = unwrap(val);
+  }
+  return result;
+}
+
+// Extract a flat agent object from KQL row: {n: {Object: {...}}}
+function extractKqlNode(row: Record<string, unknown>, alias = "n"): Record<string, unknown> | null {
+  const wrapper = row[alias] as Record<string, unknown> | undefined;
+  if (!wrapper) return null;
+  if ("Object" in wrapper) {
+    return unwrapProps(wrapper.Object as Record<string, unknown>);
+  }
+  return unwrapProps(wrapper);
 }
 
 // ============================================================================
 // RESPONSE FORMATTERS
 // ============================================================================
 
-function formatKfdbAgent(agent: Record<string, unknown>): string {
+function formatAgent(agent: Record<string, unknown>): string {
   const trust = computeTrustLabel(
     (agent.total_feedback as number) ?? 0,
-    0, // entity API doesn't have avg score, use feedback count for trust
+    0,
   );
 
   const lines: string[] = [];
   lines.push(`## ${agent.name || "Unnamed Agent"}`);
   lines.push(`**Agent ID**: ${agent.agent_id}`);
   lines.push(`**Chain**: ${getChainName((agent.chain_id as number) ?? 0)} (${agent.chain_id})`);
-  if (agent.description) lines.push(`**Description**: ${agent.description}`);
-  lines.push(`**Trust**: ${trust.display}`);
+  if (agent.description) lines.push(`**Description**: ${(agent.description as string).slice(0, 300)}`);
+  lines.push(`**Trust**: ${agent.trust_label ?? trust.display}`);
   lines.push(`**Active**: ${agent.active ?? "unknown"}`);
   if (agent.owner) lines.push(`**Owner**: ${agent.owner}`);
   if (agent.agent_wallet) lines.push(`**Wallet**: ${agent.agent_wallet}`);
   if (agent.image) lines.push(`**Image**: ${agent.image}`);
+  if (agent.web_endpoint) lines.push(`**Endpoint**: ${agent.web_endpoint}`);
   if (agent.has_real_endpoint) lines.push(`**Has Real Endpoint**: yes`);
-  if (agent.supported_trusts) {
-    const trusts = agent.supported_trusts as string[];
-    if (trusts.length > 0) lines.push(`**Trust Models**: ${trusts.join(", ")}`);
-  }
+  const skills = agent.oasf_skills as string[] | undefined;
+  if (skills && skills.length > 0) lines.push(`**Skills**: ${skills.slice(0, 5).join(", ")}`);
+  const domains = agent.oasf_domains as string[] | undefined;
+  if (domains && domains.length > 0) lines.push(`**Domains**: ${domains.join(", ")}`);
   lines.push(`**Total Feedback**: ${agent.total_feedback ?? 0}`);
   if (agent.updated_at) {
-    const d = new Date((agent.updated_at as number) * 1000);
+    const ts = agent.updated_at as number;
+    const d = new Date(ts > 1e12 ? ts : ts * 1000);
     lines.push(`**Last Updated**: ${d.toISOString().split("T")[0]}`);
   }
   return lines.join("\n");
 }
 
-function formatKfdbFeedback(fb: Record<string, unknown>): string {
+function formatFeedback(fb: Record<string, unknown>): string {
   const lines: string[] = [];
   lines.push(`- **Score**: ${fb.value ?? "N/A"}/100`);
   lines.push(`  **From**: ${fb.client_address ?? "unknown"}`);
@@ -148,7 +167,8 @@ function formatKfdbFeedback(fb: Record<string, unknown>): string {
   if (fb.endpoint) lines.push(`  **Endpoint**: ${fb.endpoint}`);
   if (fb.is_revoked) lines.push(`  **Revoked**: yes`);
   if (fb.created_at) {
-    const d = new Date((fb.created_at as number) * 1000);
+    const ts = fb.created_at as number;
+    const d = new Date(ts > 1e12 ? ts : ts * 1000);
     lines.push(`  **Date**: ${d.toISOString().split("T")[0]}`);
   }
   return lines.join("\n");
@@ -195,7 +215,7 @@ export const kfdbTools: Tool[] = [
     description:
       "Get rich details about a specific ERC-8004 agent from the KFDB knowledge graph. " +
       "Returns full profile with description, trust label, chain info, wallet, and feedback count. " +
-      "Includes graph connections (skills, domains, chain relationships) when available.",
+      "Includes skills, domains, and reputation summary.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -279,42 +299,62 @@ export const kfdbTools: Tool[] = [
 // TOOL HANDLERS
 // ============================================================================
 
-async function handleKfdbSearchAgents(
-  args: Record<string, unknown>,
-): Promise<string> {
-  const query = (args.query as string)?.toLowerCase();
+async function handleSearchAgents(args: Record<string, unknown>): Promise<string> {
+  const query = args.query as string;
   if (!query) return "Error: query is required";
 
   const chainFilter = args.chain_id as number | undefined;
   const activeOnly = (args.active_only as boolean) ?? false;
   const limit = Math.min(Math.max(1, (args.limit as number) ?? 10), 50);
 
-  // Strategy 1: Try semantic search first (best quality)
-  const semanticResults = await kfdbSemanticSearch(query, "ERC8004Agent", limit);
+  // Strategy 1: Semantic search (best quality, uses HNSW embeddings)
+  const semanticResults = await kfdbSemanticSearch(query, limit * 2);
   if (semanticResults && semanticResults.length > 0) {
-    let filtered = semanticResults;
-    if (chainFilter) {
-      filtered = filtered.filter((a) => a.chain_id === chainFilter);
+    // Semantic results come from file_embeddings with erc8004-agent:// paths
+    // Extract agent UUIDs from file_path: "erc8004-agent://<uuid>/<name>"
+    const agentUuids = semanticResults
+      .map((r) => {
+        const props = r.properties ? unwrapProps(r.properties as Record<string, unknown>) : r;
+        const path = (props.file_path as string) ?? "";
+        const match = path.match(/erc8004-agent:\/\/([a-f0-9-]+)\//);
+        return match ? match[1] : null;
+      })
+      .filter(Boolean) as string[];
+
+    if (agentUuids.length > 0) {
+      // Batch-fetch agent details via KQL
+      const uuidList = agentUuids.slice(0, limit).map((u) => `'${u}'`).join(", ");
+      try {
+        const rows = await kfdbKQL(
+          `MATCH (n:ERC8004Agent) WHERE n._id IN [${uuidList}] RETURN n LIMIT ${limit}`,
+        );
+        let agents = rows.map((r) => extractKqlNode(r)).filter(Boolean) as Record<string, unknown>[];
+
+        if (chainFilter) agents = agents.filter((a) => a.chain_id === chainFilter);
+        if (activeOnly) agents = agents.filter((a) => a.active === true);
+
+        if (agents.length > 0) {
+          const lines = [
+            `# KFDB Agent Search: "${query}"`,
+            `**Source**: Semantic search (embedding similarity)`,
+            `**Results**: ${agents.length} agents\n`,
+          ];
+          for (const agent of agents.slice(0, limit)) {
+            lines.push(formatAgent(agent));
+            lines.push("");
+          }
+          return lines.join("\n");
+        }
+      } catch {
+        // KQL IN may not be supported — fall through to entity scan
+      }
     }
-    if (activeOnly) {
-      filtered = filtered.filter((a) => a.active === true);
-    }
-    const results = filtered.slice(0, limit);
-    const lines = [
-      `# KFDB Agent Search: "${args.query}"`,
-      `**Source**: Semantic search (embedding similarity)`,
-      `**Results**: ${results.length} agents found\n`,
-    ];
-    for (const agent of results) {
-      lines.push(formatKfdbAgent(agent));
-      lines.push("");
-    }
-    return lines.join("\n");
   }
 
-  // Strategy 2: Scan entity API pages and filter by name/description match
+  // Strategy 2: Text search via entity API scan (limited to 5000 agents)
+  const queryLower = query.toLowerCase();
   const BATCH_SIZE = 500;
-  const MAX_PAGES = 10; // scan up to 5000 agents
+  const MAX_PAGES = 10;
   const matches: Record<string, unknown>[] = [];
 
   for (let page = 0; page < MAX_PAGES && matches.length < limit; page++) {
@@ -326,7 +366,7 @@ async function handleKfdbSearchAgents(
       const desc = ((agent.description as string) ?? "").toLowerCase();
       const agentId = ((agent.agent_id as string) ?? "").toLowerCase();
 
-      if (!name.includes(query) && !desc.includes(query) && !agentId.includes(query)) {
+      if (!name.includes(queryLower) && !desc.includes(queryLower) && !agentId.includes(queryLower)) {
         continue;
       }
       if (chainFilter && agent.chain_id !== chainFilter) continue;
@@ -337,101 +377,76 @@ async function handleKfdbSearchAgents(
   }
 
   if (matches.length === 0) {
-    return `# KFDB Agent Search: "${args.query}"\n\nNo agents found matching "${args.query}". ` +
-      `Try a broader search term or different chain_id. ` +
-      `KFDB has 131K+ agents indexed across multiple chains.`;
+    return `# KFDB Agent Search: "${query}"\n\nNo agents found matching "${query}". ` +
+      `Try a broader term or different chain_id. KFDB has 131K+ agents across 9 chains.`;
   }
 
   const lines = [
-    `# KFDB Agent Search: "${args.query}"`,
+    `# KFDB Agent Search: "${query}"`,
     `**Source**: Entity API (text match)`,
-    `**Results**: ${matches.length} agents found\n`,
+    `**Results**: ${matches.length} agents\n`,
   ];
   for (const agent of matches) {
-    lines.push(formatKfdbAgent(agent));
+    lines.push(formatAgent(agent));
     lines.push("");
   }
   return lines.join("\n");
 }
 
-async function handleKfdbGetAgentDetails(
-  args: Record<string, unknown>,
-): Promise<string> {
+async function handleGetAgentDetails(args: Record<string, unknown>): Promise<string> {
   const agentId = args.agent_id as string;
   if (!agentId) return "Error: agent_id is required (format: chainId:tokenId)";
+  if (!agentId.includes(":")) return "Error: agent_id must be in chainId:tokenId format (e.g. '8453:123')";
 
-  if (!agentId.includes(":")) {
-    return "Error: agent_id must be in chainId:tokenId format (e.g. '8453:123')";
-  }
+  // Use KQL for O(1) lookup instead of scanning 131K agents
+  const rows = await kfdbKQL(
+    `MATCH (n:ERC8004Agent) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN n LIMIT 1`,
+  );
 
-  // Scan entity API to find by agent_id property
-  const BATCH_SIZE = 500;
-  const MAX_PAGES = 20;
-  let agent: Record<string, unknown> | null = null;
-
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const data = await kfdbEntities("ERC8004Agent", BATCH_SIZE, page * BATCH_SIZE);
-    if (!data.items || data.items.length === 0) break;
-
-    const found = data.items.find((a) => a.agent_id === agentId);
-    if (found) {
-      agent = found;
-      break;
-    }
-  }
-
+  const agent = rows.length > 0 ? extractKqlNode(rows[0]) : null;
   if (!agent) {
     return `Agent ${agentId} not found in KFDB. Verify the chainId:tokenId format is correct.`;
   }
 
-  const lines = [formatKfdbAgent(agent)];
+  const lines = [formatAgent(agent)];
 
-  // Try to get ego-graph for connections (requires auth)
-  const graph = await kfdbEgoGraph("ERC8004Agent", agent._id as string);
-  if (graph) {
-    const edges = (graph.edges ?? []) as Record<string, unknown>[];
-    const neighbors = (graph.neighbors ?? graph.nodes ?? []) as Record<string, unknown>[];
-    if (edges.length > 0 || neighbors.length > 0) {
-      lines.push("\n### Graph Connections");
-      if (edges.length > 0) {
-        lines.push(`**Edges**: ${edges.length} connections`);
-        for (const edge of edges.slice(0, 10)) {
-          lines.push(`- ${edge.label ?? edge.type ?? "connected"} -> ${edge.target_label ?? edge.to ?? "?"}`);
-        }
+  // Get feedback summary via KQL (fast targeted query)
+  try {
+    const fbRows = await kfdbKQL(
+      `MATCH (n:ERC8004Feedback) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN n LIMIT 50`,
+    );
+    const feedbacks = fbRows.map((r) => extractKqlNode(r)).filter(Boolean) as Record<string, unknown>[];
+
+    if (feedbacks.length > 0) {
+      const scores = feedbacks.map((f) => (f.value as number) ?? 0);
+      const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+      const trust = computeTrustLabel(feedbacks.length, avg);
+
+      lines.push("\n### Reputation Summary");
+      lines.push(`**Feedback Count**: ${feedbacks.length}`);
+      lines.push(`**Average Score**: ${avg.toFixed(1)}/100`);
+      lines.push(`**Trust**: ${trust.display}`);
+
+      const tags = new Map<string, number>();
+      for (const f of feedbacks) {
+        if (f.tag1) tags.set(f.tag1 as string, (tags.get(f.tag1 as string) ?? 0) + 1);
+      }
+      if (tags.size > 0) {
+        const tagStr = [...tags.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([t, c]) => `${t} (${c})`)
+          .join(", ");
+        lines.push(`**Tags**: ${tagStr}`);
       }
     }
-  }
-
-  // Try to get feedback summary
-  const feedbackData = await kfdbEntities("ERC8004Feedback", 500, 0);
-  const feedbacks = feedbackData.items.filter((f) => f.agent_id === agentId);
-  if (feedbacks.length > 0) {
-    const scores = feedbacks.map((f) => (f.value as number) ?? 0);
-    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-    const trust = computeTrustLabel(feedbacks.length, avg);
-    lines.push("\n### Reputation Summary");
-    lines.push(`**Feedback Count**: ${feedbacks.length}`);
-    lines.push(`**Average Score**: ${avg.toFixed(1)}/100`);
-    lines.push(`**Trust**: ${trust.display}`);
-    const tags = new Map<string, number>();
-    for (const f of feedbacks) {
-      if (f.tag1) tags.set(f.tag1 as string, (tags.get(f.tag1 as string) ?? 0) + 1);
-    }
-    if (tags.size > 0) {
-      const tagStr = [...tags.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .map(([t, c]) => `${t} (${c})`)
-        .join(", ");
-      lines.push(`**Tags**: ${tagStr}`);
-    }
+  } catch {
+    // Feedback query failed — non-blocking
   }
 
   return lines.join("\n");
 }
 
-async function handleKfdbFindSimilar(
-  args: Record<string, unknown>,
-): Promise<string> {
+async function handleFindSimilar(args: Record<string, unknown>): Promise<string> {
   const agentId = args.agent_id as string | undefined;
   let description = args.description as string | undefined;
   const limit = Math.min(Math.max(1, (args.limit as number) ?? 5), 20);
@@ -440,52 +455,66 @@ async function handleKfdbFindSimilar(
     return "Error: provide either agent_id or description to find similar agents";
   }
 
-  // If agent_id given, look up its description
+  // If agent_id given, look up its description via KQL
   if (agentId && !description) {
-    const BATCH_SIZE = 500;
-    const MAX_PAGES = 20;
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const data = await kfdbEntities("ERC8004Agent", BATCH_SIZE, page * BATCH_SIZE);
-      if (!data.items || data.items.length === 0) break;
-      const found = data.items.find((a) => a.agent_id === agentId);
-      if (found) {
-        description = (found.description as string) ?? (found.name as string);
-        break;
+    const rows = await kfdbKQL(
+      `MATCH (n:ERC8004Agent) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN n LIMIT 1`,
+    );
+    const agent = rows.length > 0 ? extractKqlNode(rows[0]) : null;
+    if (!agent) {
+      return `Agent ${agentId} not found in KFDB.`;
+    }
+    description = (agent.description as string) ?? (agent.name as string);
+  }
+
+  if (!description) return "Error: could not determine description for similarity search.";
+
+  // Semantic search via HNSW
+  const semanticResults = await kfdbSemanticSearch(description, limit + 5);
+  if (semanticResults && semanticResults.length > 0) {
+    const agentUuids = semanticResults
+      .map((r) => {
+        const props = r.properties ? unwrapProps(r.properties as Record<string, unknown>) : r;
+        const path = (props.file_path as string) ?? "";
+        const match = path.match(/erc8004-agent:\/\/([a-f0-9-]+)\//);
+        return match ? match[1] : null;
+      })
+      .filter(Boolean) as string[];
+
+    if (agentUuids.length > 0) {
+      const uuidList = agentUuids.slice(0, limit + 3).map((u) => `'${u}'`).join(", ");
+      try {
+        const rows = await kfdbKQL(
+          `MATCH (n:ERC8004Agent) WHERE n._id IN [${uuidList}] RETURN n LIMIT ${limit + 3}`,
+        );
+        let agents = rows.map((r) => extractKqlNode(r)).filter(Boolean) as Record<string, unknown>[];
+        if (agentId) agents = agents.filter((a) => a.agent_id !== agentId);
+        agents = agents.slice(0, limit);
+
+        if (agents.length > 0) {
+          const lines = [
+            `# Similar Agents`,
+            agentId ? `**Reference**: ${agentId}` : `**Query**: "${description.slice(0, 100)}"`,
+            `**Source**: Semantic similarity (embeddings)`,
+            `**Results**: ${agents.length}\n`,
+          ];
+          for (let i = 0; i < agents.length; i++) {
+            lines.push(`### ${i + 1}. Match`);
+            lines.push(formatAgent(agents[i]));
+            lines.push("");
+          }
+          return lines.join("\n");
+        }
+      } catch {
+        // Fall through to keyword search
       }
     }
-    if (!description) {
-      return `Agent ${agentId} not found in KFDB. Cannot determine description for similarity search.`;
-    }
   }
 
-  // Try semantic search
-  const semanticResults = await kfdbSemanticSearch(description!, "ERC8004Agent", limit + 1);
-  if (semanticResults && semanticResults.length > 0) {
-    // Filter out the source agent if present
-    let results = semanticResults;
-    if (agentId) {
-      results = results.filter((a) => a.agent_id !== agentId);
-    }
-    results = results.slice(0, limit);
-
-    const lines = [
-      `# Similar Agents`,
-      agentId ? `**Reference**: ${agentId}` : `**Query**: "${description}"`,
-      `**Source**: Semantic similarity (embeddings)`,
-      `**Results**: ${results.length} similar agents\n`,
-    ];
-    for (let i = 0; i < results.length; i++) {
-      lines.push(`### ${i + 1}. Match`);
-      lines.push(formatKfdbAgent(results[i]));
-      lines.push("");
-    }
-    return lines.join("\n");
-  }
-
-  // Fallback: text-based similarity using keyword overlap
-  const keywords = description!.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+  // Fallback: keyword overlap on entity scan
+  const keywords = description.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
   if (keywords.length === 0) {
-    return "Could not extract meaningful keywords for similarity search. Semantic search is not available - try again later.";
+    return "Could not extract keywords. Semantic search unavailable — try again later.";
   }
 
   const BATCH_SIZE = 500;
@@ -500,9 +529,7 @@ async function handleKfdbFindSimilar(
       if (agentId && agent.agent_id === agentId) continue;
       const text = `${agent.name ?? ""} ${agent.description ?? ""}`.toLowerCase();
       const matchCount = keywords.filter((kw) => text.includes(kw)).length;
-      if (matchCount > 0) {
-        scored.push({ agent, score: matchCount / keywords.length });
-      }
+      if (matchCount > 0) scored.push({ agent, score: matchCount / keywords.length });
     }
   }
 
@@ -510,159 +537,109 @@ async function handleKfdbFindSimilar(
   const top = scored.slice(0, limit);
 
   if (top.length === 0) {
-    return `No similar agents found. Semantic search is not currently available (HNSW index building). Try again later for better results.`;
+    return `No similar agents found. Semantic search may be building — try again later.`;
   }
 
   const lines = [
     `# Similar Agents`,
-    agentId ? `**Reference**: ${agentId}` : `**Query**: "${description}"`,
-    `**Source**: Keyword overlap (semantic search unavailable)`,
-    `**Results**: ${top.length} similar agents\n`,
+    agentId ? `**Reference**: ${agentId}` : `**Query**: "${description.slice(0, 100)}"`,
+    `**Source**: Keyword overlap`,
+    `**Results**: ${top.length}\n`,
   ];
   for (let i = 0; i < top.length; i++) {
-    lines.push(`### ${i + 1}. Match (${(top[i].score * 100).toFixed(0)}% keyword overlap)`);
-    lines.push(formatKfdbAgent(top[i].agent));
+    lines.push(`### ${i + 1}. (${(top[i].score * 100).toFixed(0)}% overlap)`);
+    lines.push(formatAgent(top[i].agent));
     lines.push("");
   }
   return lines.join("\n");
 }
 
-async function handleKfdbEcosystemStats(
-  args: Record<string, unknown>,
-): Promise<string> {
+async function handleEcosystemStats(args: Record<string, unknown>): Promise<string> {
   const chainFilter = args.chain_id as number | undefined;
 
-  // Get label counts from KFDB
   const labelsData = await kfdbLabels();
   const labelMap = new Map<string, number>();
-  for (const l of labelsData.labels) {
-    labelMap.set(l.label, l.count);
-  }
-
-  const agentCount = labelMap.get("ERC8004Agent") ?? 0;
-  const feedbackCount = labelMap.get("ERC8004Feedback") ?? 0;
-  const accountCount = labelMap.get("ERC8004Account") ?? 0;
+  for (const l of labelsData.labels) labelMap.set(l.label, l.count);
 
   const lines = [
     `# ERC-8004 Ecosystem Statistics (KFDB)`,
     "",
     `## Global Counts`,
-    `- **Agents**: ${agentCount.toLocaleString()}`,
-    `- **Feedback Entries**: ${feedbackCount.toLocaleString()}`,
-    `- **Accounts**: ${accountCount.toLocaleString()}`,
+    `- **Agents**: ${(labelMap.get("ERC8004Agent") ?? 0).toLocaleString()}`,
+    `- **Feedback Entries**: ${(labelMap.get("ERC8004Feedback") ?? 0).toLocaleString()}`,
+    `- **Accounts**: ${(labelMap.get("ERC8004Account") ?? 0).toLocaleString()}`,
+    `- **Skills**: ${(labelMap.get("ERC8004Skill") ?? 0).toLocaleString()}`,
+    `- **Domains**: ${(labelMap.get("ERC8004Domain") ?? 0).toLocaleString()}`,
+    `- **Chains**: ${(labelMap.get("ERC8004Chain") ?? 0).toLocaleString()}`,
   ];
 
-  // If chain filter requested, scan agents for that chain
   if (chainFilter !== undefined) {
-    const BATCH_SIZE = 500;
-    const MAX_PAGES = 20;
-    let chainAgents = 0;
-    let activeAgents = 0;
-    let withEndpoint = 0;
-    let totalFeedbackSum = 0;
-
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const data = await kfdbEntities("ERC8004Agent", BATCH_SIZE, page * BATCH_SIZE);
-      if (!data.items || data.items.length === 0) break;
-
-      for (const agent of data.items) {
-        if (agent.chain_id !== chainFilter) continue;
-        chainAgents++;
-        if (agent.active === true) activeAgents++;
-        if (agent.has_real_endpoint === true) withEndpoint++;
-        totalFeedbackSum += (agent.total_feedback as number) ?? 0;
-      }
+    // Use entity scan for chain-specific stats (limited sample)
+    const data = await kfdbEntities("ERC8004Agent", 2000, 0);
+    let chainAgents = 0, activeAgents = 0, withEndpoint = 0, totalFb = 0;
+    for (const agent of data.items) {
+      if (agent.chain_id !== chainFilter) continue;
+      chainAgents++;
+      if (agent.active === true) activeAgents++;
+      if (agent.has_real_endpoint === true) withEndpoint++;
+      totalFb += (agent.total_feedback as number) ?? 0;
     }
-
     lines.push("");
     lines.push(`## ${getChainName(chainFilter)} (Chain ${chainFilter})`);
-    lines.push(`- **Agents on chain**: ${chainAgents.toLocaleString()}`);
+    lines.push(`- **Agents**: ${chainAgents.toLocaleString()} (from sample of ${data.items.length})`);
     lines.push(`- **Active**: ${activeAgents.toLocaleString()}`);
     lines.push(`- **With Real Endpoints**: ${withEndpoint.toLocaleString()}`);
-    lines.push(`- **Total Feedback Received**: ${totalFeedbackSum.toLocaleString()}`);
+    lines.push(`- **Total Feedback**: ${totalFb.toLocaleString()}`);
   } else {
-    // Get chain distribution from a sample
-    const SAMPLE_SIZE = 2000;
-    const data = await kfdbEntities("ERC8004Agent", SAMPLE_SIZE, 0);
+    const data = await kfdbEntities("ERC8004Agent", 2000, 0);
     const chainCounts = new Map<number, number>();
     for (const agent of data.items) {
       const chain = agent.chain_id as number;
       chainCounts.set(chain, (chainCounts.get(chain) ?? 0) + 1);
     }
-
     lines.push("");
-    lines.push(`## Chain Distribution (sample of ${data.items.length} agents)`);
+    lines.push(`## Chain Distribution (sample of ${data.items.length})`);
     const sorted = [...chainCounts.entries()].sort((a, b) => b[1] - a[1]);
     for (const [chain, count] of sorted) {
       const pct = ((count / data.items.length) * 100).toFixed(1);
-      lines.push(`- **${getChainName(chain)}** (${chain}): ${count} agents (${pct}%)`);
-    }
-  }
-
-  // Additional KFDB graph context
-  const otherLabels = labelsData.labels
-    .filter((l) => !l.label.startsWith("ERC8004"))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 5);
-  if (otherLabels.length > 0) {
-    lines.push("");
-    lines.push(`## Other KFDB Entities (top 5)`);
-    for (const l of otherLabels) {
-      lines.push(`- **${l.label}**: ${l.count.toLocaleString()}`);
+      lines.push(`- **${getChainName(chain)}** (${chain}): ${count} (${pct}%)`);
     }
   }
 
   lines.push("");
-  lines.push(`*Data source: KFDB production (ScyllaDB)*`);
-
+  lines.push(`*Data source: KFDB production (ScyllaDB + ClickHouse)*`);
   return lines.join("\n");
 }
 
-async function handleKfdbFeedbackAnalysis(
-  args: Record<string, unknown>,
-): Promise<string> {
+async function handleFeedbackAnalysis(args: Record<string, unknown>): Promise<string> {
   const agentId = args.agent_id as string;
   if (!agentId) return "Error: agent_id is required (format: chainId:tokenId)";
 
   const limit = Math.min(Math.max(1, (args.limit as number) ?? 20), 100);
 
-  // Scan feedback entities to find those matching the agent
-  const BATCH_SIZE = 500;
-  const MAX_PAGES = 40; // scan up to 20K feedback entries
-  const feedbacks: Record<string, unknown>[] = [];
-
-  for (let page = 0; page < MAX_PAGES && feedbacks.length < limit; page++) {
-    const data = await kfdbEntities("ERC8004Feedback", BATCH_SIZE, page * BATCH_SIZE);
-    if (!data.items || data.items.length === 0) break;
-
-    for (const fb of data.items) {
-      if (fb.agent_id === agentId) {
-        feedbacks.push(fb);
-        if (feedbacks.length >= limit) break;
-      }
-    }
-  }
+  // Use KQL for targeted feedback lookup instead of scanning 106K entries
+  const rows = await kfdbKQL(
+    `MATCH (n:ERC8004Feedback) WHERE n.agent_id = '${agentId.replace(/'/g, "\\'")}' RETURN n LIMIT ${limit}`,
+  );
+  const feedbacks = rows.map((r) => extractKqlNode(r)).filter(Boolean) as Record<string, unknown>[];
 
   if (feedbacks.length === 0) {
-    return `# Feedback Analysis: ${agentId}\n\nNo feedback found for agent ${agentId} in KFDB. ` +
-      `The agent may have no reviews yet, or feedback may not have been synced.`;
+    return `# Feedback Analysis: ${agentId}\n\nNo feedback found for agent ${agentId}. ` +
+      `The agent may have no reviews yet.`;
   }
 
-  // Compute stats
   const scores = feedbacks.map((f) => (f.value as number) ?? 0);
   const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
   const min = Math.min(...scores);
   const max = Math.max(...scores);
   const trust = computeTrustLabel(feedbacks.length, avg);
 
-  // Tag distribution
   const tags = new Map<string, number>();
   for (const f of feedbacks) {
     if (f.tag1) tags.set(f.tag1 as string, (tags.get(f.tag1 as string) ?? 0) + 1);
     if (f.tag2) tags.set(f.tag2 as string, (tags.get(f.tag2 as string) ?? 0) + 1);
   }
 
-  // Unique reviewers
   const reviewers = new Set(feedbacks.map((f) => f.client_address as string));
 
   const lines = [
@@ -688,7 +665,7 @@ async function handleKfdbFeedbackAnalysis(
   lines.push("");
   lines.push(`## Recent Feedback (${Math.min(feedbacks.length, 10)} shown)`);
   for (const fb of feedbacks.slice(0, 10)) {
-    lines.push(formatKfdbFeedback(fb));
+    lines.push(formatFeedback(fb));
   }
 
   return lines.join("\n");
@@ -704,15 +681,15 @@ export async function handleKfdbTool(
 ): Promise<unknown> {
   switch (name) {
     case "kfdb_search_agents":
-      return handleKfdbSearchAgents(args);
+      return handleSearchAgents(args);
     case "kfdb_get_agent_details":
-      return handleKfdbGetAgentDetails(args);
+      return handleGetAgentDetails(args);
     case "kfdb_find_similar":
-      return handleKfdbFindSimilar(args);
+      return handleFindSimilar(args);
     case "kfdb_ecosystem_stats":
-      return handleKfdbEcosystemStats(args);
+      return handleEcosystemStats(args);
     case "kfdb_feedback_analysis":
-      return handleKfdbFeedbackAnalysis(args);
+      return handleFeedbackAnalysis(args);
     default:
       return `Unknown KFDB tool: ${name}`;
   }
