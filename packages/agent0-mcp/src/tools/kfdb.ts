@@ -31,9 +31,10 @@ async function kfdbFetch(path: string, options?: RequestInit): Promise<Response>
   if (KFDB_API_KEY) {
     headers["Authorization"] = `Bearer ${KFDB_API_KEY}`;
   }
-  if (WALLET_ADDRESS) {
-    headers["X-Wallet-Address"] = WALLET_ADDRESS;
-  }
+  // NOTE: Do NOT send X-Wallet-Address for read-only KFDB tools.
+  // ERC-8004 data lives in the default/global tenant. Adding X-Wallet-Address
+  // scopes queries to a per-wallet tenant keyspace that has no ERC-8004 data.
+  // Wallet scoping is only needed for per-user write operations (notes, private data).
   return fetch(url, { ...options, headers });
 }
 
