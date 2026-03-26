@@ -445,10 +445,19 @@ async function handleSearchAgents(
     args.chains = [args.chainId as number];
   }
 
-  const limit = Math.min(
-    Math.max(1, (args.limit as number) ?? 20),
-    100,
-  );
+  // Robust chains parsing: handle string "[137]", "137", number, or array
+  if (args.chains !== undefined && !Array.isArray(args.chains)) {
+    const raw = String(args.chains).trim().replace(/^\[|\]$/g, '');
+    if (raw) {
+      const parsed = raw.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+      args.chains = parsed.length > 0 ? parsed : undefined;
+    } else {
+      args.chains = undefined;
+    }
+  }
+
+  const rawLimit = args.limit !== undefined ? parseInt(String(args.limit), 10) : 20;
+  const limit = Math.min(Math.max(1, isNaN(rawLimit) ? 20 : rawLimit), 100);
 
   const chainId = (args.chains as number[] | undefined)?.[0] ?? DEFAULT_CHAIN_ID;
 
