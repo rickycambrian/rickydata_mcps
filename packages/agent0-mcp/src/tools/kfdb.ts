@@ -186,10 +186,12 @@ function formatAgent(agent: Record<string, unknown>): string {
   const domains = agent.oasf_domains as string[] | undefined;
   if (domains && domains.length > 0) lines.push(`**Domains**: ${domains.join(", ")}`);
   lines.push(`**Total Feedback**: ${agent.total_feedback ?? 0}`);
-  if (agent.updated_at) {
-    const ts = agent.updated_at as number;
-    const d = new Date(ts > 1e12 ? ts : ts * 1000);
-    lines.push(`**Last Updated**: ${d.toISOString().split("T")[0]}`);
+  if (agent.updated_at && typeof agent.updated_at === "number" && agent.updated_at > 0) {
+    try {
+      const ts = agent.updated_at;
+      const d = new Date(ts > 1e12 ? ts : ts * 1000);
+      if (!isNaN(d.getTime())) lines.push(`**Last Updated**: ${d.toISOString().split("T")[0]}`);
+    } catch { /* skip invalid dates */ }
   }
   return lines.join("\n");
 }
@@ -201,10 +203,12 @@ function formatFeedback(fb: Record<string, unknown>): string {
   if (fb.tag1) lines.push(`  **Tag**: ${fb.tag1}${fb.tag2 ? ` / ${fb.tag2}` : ""}`);
   if (fb.endpoint) lines.push(`  **Endpoint**: ${fb.endpoint}`);
   if (fb.is_revoked) lines.push(`  **Revoked**: yes`);
-  if (fb.created_at) {
-    const ts = fb.created_at as number;
-    const d = new Date(ts > 1e12 ? ts : ts * 1000);
-    lines.push(`  **Date**: ${d.toISOString().split("T")[0]}`);
+  if (fb.created_at && typeof fb.created_at === "number" && fb.created_at > 0) {
+    try {
+      const ts = fb.created_at;
+      const d = new Date(ts > 1e12 ? ts : ts * 1000);
+      if (!isNaN(d.getTime())) lines.push(`  **Date**: ${d.toISOString().split("T")[0]}`);
+    } catch { /* skip invalid dates */ }
   }
   return lines.join("\n");
 }
