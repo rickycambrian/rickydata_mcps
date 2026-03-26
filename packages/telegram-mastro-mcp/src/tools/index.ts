@@ -4,6 +4,7 @@ import { searchTools, handleSearchTool } from "./search.js";
 import { analyticsTools, handleAnalyticsTool } from "./analytics.js";
 import { configTools, handleConfigTool } from "./config.js";
 import { twitterTools, handleTwitterTool } from "./twitter.js";
+import { intelligenceTools, handleIntelligenceTool } from "./intelligence.js";
 
 // Aggregate all tool definitions
 export const TOOLS: Tool[] = [
@@ -12,6 +13,7 @@ export const TOOLS: Tool[] = [
   ...analyticsTools,
   ...configTools,
   ...twitterTools,
+  ...intelligenceTools,
 ];
 
 // Tool name -> handler routing map
@@ -34,6 +36,9 @@ for (const tool of configTools) {
 }
 for (const tool of twitterTools) {
   TOOL_HANDLERS[tool.name] = (args) => handleTwitterTool(tool.name, args);
+}
+for (const tool of intelligenceTools) {
+  TOOL_HANDLERS[tool.name] = (args) => handleIntelligenceTool(tool.name, args);
 }
 
 export async function handleToolCall(

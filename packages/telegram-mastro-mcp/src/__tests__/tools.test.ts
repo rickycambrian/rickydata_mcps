@@ -12,8 +12,8 @@ import {
 // ============================================================================
 
 describe("Tool registry", () => {
-  it("exports exactly 15 tools", () => {
-    expect(TOOLS.length).toBe(15);
+  it("exports exactly 20 tools", () => {
+    expect(TOOLS.length).toBe(20);
   });
 
   it("has unique tool names", () => {
@@ -57,6 +57,11 @@ describe("Tool registry", () => {
     "telegram_configure_kfdb",
     "telegram_twitter_link",
     "telegram_twitter_auth_url",
+    "telegram_community_report",
+    "telegram_lead_enrichment",
+    "telegram_conversation_summary",
+    "telegram_member_network",
+    "telegram_alert_setup",
   ];
 
   it.each(expectedTools)("includes tool: %s", (name) => {
@@ -243,6 +248,98 @@ describe("Input validation", () => {
     try {
       const result = await handleToolCall("telegram_cross_group_overlap", {
         group_ids: [1],
+      });
+      expect(result).toContain("Error");
+    } catch (e) {
+      expect((e as Error).message).toBeTruthy();
+    }
+  });
+
+  it("telegram_community_report requires group_name", async () => {
+    try {
+      const result = await handleToolCall("telegram_community_report", {});
+      expect(result).toContain("Error");
+    } catch (e) {
+      expect((e as Error).message).toBeTruthy();
+    }
+  });
+
+  it("telegram_lead_enrichment requires telegram_user_ids array", async () => {
+    try {
+      const result = await handleToolCall("telegram_lead_enrichment", {});
+      expect(result).toContain("Error");
+    } catch (e) {
+      expect((e as Error).message).toBeTruthy();
+    }
+  });
+
+  it("telegram_lead_enrichment rejects empty array", async () => {
+    try {
+      const result = await handleToolCall("telegram_lead_enrichment", {
+        telegram_user_ids: [],
+      });
+      expect(result).toContain("Error");
+    } catch (e) {
+      expect((e as Error).message).toBeTruthy();
+    }
+  });
+
+  it("telegram_conversation_summary requires source_chat", async () => {
+    try {
+      const result = await handleToolCall("telegram_conversation_summary", {});
+      expect(result).toContain("Error");
+    } catch (e) {
+      expect((e as Error).message).toBeTruthy();
+    }
+  });
+
+  it("telegram_member_network requires at least 2 group_names", async () => {
+    try {
+      const result = await handleToolCall("telegram_member_network", {
+        group_names: ["only_one"],
+      });
+      expect(result).toContain("Error");
+    } catch (e) {
+      expect((e as Error).message).toBeTruthy();
+    }
+  });
+
+  it("telegram_member_network rejects empty array", async () => {
+    try {
+      const result = await handleToolCall("telegram_member_network", {});
+      expect(result).toContain("Error");
+    } catch (e) {
+      expect((e as Error).message).toBeTruthy();
+    }
+  });
+
+  it("telegram_alert_setup requires group_name", async () => {
+    try {
+      const result = await handleToolCall("telegram_alert_setup", {
+        keywords: ["test"],
+      });
+      expect(result).toContain("Error");
+    } catch (e) {
+      expect((e as Error).message).toBeTruthy();
+    }
+  });
+
+  it("telegram_alert_setup requires keywords array", async () => {
+    try {
+      const result = await handleToolCall("telegram_alert_setup", {
+        group_name: "test_group",
+      });
+      expect(result).toContain("Error");
+    } catch (e) {
+      expect((e as Error).message).toBeTruthy();
+    }
+  });
+
+  it("telegram_alert_setup rejects empty keywords", async () => {
+    try {
+      const result = await handleToolCall("telegram_alert_setup", {
+        group_name: "test_group",
+        keywords: [],
       });
       expect(result).toContain("Error");
     } catch (e) {
