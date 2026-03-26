@@ -157,15 +157,31 @@ export async function kfdbEntities(
   limit = 20,
   offset = 0,
 ): Promise<KfdbEntityResponse> {
-  const res = await kfdbFetch(
-    `/api/v1/entities/${label}?limit=${limit}&offset=${offset}`,
-  );
+  // Use POST /api/v1/query (KQL) instead of GET /api/v1/entities/:label
+  // because the entities endpoint is NOT tenant-aware (ignores X-Wallet-Address),
+  // while the query endpoint respects it.
+  const query = `MATCH (n:${label}) RETURN n LIMIT ${limit}`;
+  const res = await kfdbFetch("/api/v1/query", {
+    method: "POST",
+    body: JSON.stringify({ query }),
+  });
   if (!res.ok) {
     throw new Error(
       `KFDB entity API error: ${res.status} ${await res.text()}`,
     );
   }
-  return res.json() as Promise<KfdbEntityResponse>;
+  const result = (await res.json()) as { data?: Record<string, unknown>[] };
+  const items = (result.data ?? []).map((row) => {
+    const node = extractKqlNode(row);
+    return node ?? row;
+  });
+  return {
+    label,
+    items,
+    total: items.length,
+    limit,
+    offset,
+  };
 }
 
 export async function kfdbLabels(): Promise<{

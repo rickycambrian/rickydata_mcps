@@ -115,30 +115,59 @@ async function handleSearchMessages(
   if (!query) return "Error: query is required";
   const limit = Math.min(Math.max(1, (args.limit as number) ?? 10), 50);
 
-  const results = await kfdbSemanticSearch(query, limit, "TelegramMessage");
+  // Try semantic search first
+  const semanticResults = await kfdbSemanticSearch(query, limit, "TelegramMessage");
 
-  if (!results || results.length === 0) {
+  if (semanticResults && semanticResults.length > 0) {
+    const lines = [
+      `# Telegram Message Search: "${query}"`,
+      `**Results**: ${semanticResults.length} (semantic)\n`,
+    ];
+
+    for (let i = 0; i < semanticResults.length; i++) {
+      const r = semanticResults[i];
+      const props = r.properties
+        ? unwrapProps(r.properties as Record<string, unknown>)
+        : r;
+      lines.push(`### ${i + 1}.`);
+      if (props.text) lines.push(`**Text**: ${(props.text as string).slice(0, 500)}`);
+      if (props.sender_id) lines.push(`**Sender ID**: ${props.sender_id}`);
+      if (props.chat_id) lines.push(`**Chat ID**: ${props.chat_id}`);
+      if (props.date) lines.push(`**Date**: ${props.date}`);
+      if (props.chat_title) lines.push(`**Chat**: ${props.chat_title}`);
+      if (r.similarity !== undefined)
+        lines.push(`**Similarity**: ${((r.similarity as number) * 100).toFixed(1)}%`);
+      lines.push("");
+    }
+
+    return lines.join("\n");
+  }
+
+  // Fall back to KQL text matching
+  const safeQuery = query.replace(/'/g, "\\'");
+  const kql = `MATCH (n:TelegramMessage) WHERE n.text CONTAINS '${safeQuery}' RETURN n LIMIT ${limit}`;
+  const rows = await kfdbKQL(kql);
+  const messages = rows
+    .map((r) => extractKqlNode(r))
+    .filter(Boolean) as Record<string, unknown>[];
+
+  if (messages.length === 0) {
     return `# Telegram Message Search: "${query}"\n\nNo messages found. Messages may not be indexed yet or no matches found.`;
   }
 
   const lines = [
     `# Telegram Message Search: "${query}"`,
-    `**Results**: ${results.length}\n`,
+    `**Results**: ${messages.length} (text match)\n`,
   ];
 
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
-    const props = r.properties
-      ? unwrapProps(r.properties as Record<string, unknown>)
-      : r;
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     lines.push(`### ${i + 1}.`);
-    if (props.text) lines.push(`**Text**: ${(props.text as string).slice(0, 500)}`);
-    if (props.sender_id) lines.push(`**Sender ID**: ${props.sender_id}`);
-    if (props.chat_id) lines.push(`**Chat ID**: ${props.chat_id}`);
-    if (props.date) lines.push(`**Date**: ${props.date}`);
-    if (props.chat_title) lines.push(`**Chat**: ${props.chat_title}`);
-    if (r.similarity !== undefined)
-      lines.push(`**Similarity**: ${((r.similarity as number) * 100).toFixed(1)}%`);
+    if (msg.text) lines.push(`**Text**: ${(msg.text as string).slice(0, 500)}`);
+    if (msg.sender_id) lines.push(`**Sender ID**: ${msg.sender_id}`);
+    if (msg.chat_id) lines.push(`**Chat ID**: ${msg.chat_id}`);
+    if (msg.date) lines.push(`**Date**: ${msg.date}`);
+    if (msg.chat_title) lines.push(`**Chat**: ${msg.chat_title}`);
     lines.push("");
   }
 
