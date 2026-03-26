@@ -10,7 +10,7 @@
  */
 // Dynamic import to avoid module-level initialization from agent0-sdk
 // which can hang in containerized environments with network restrictions
-type SDKConfig = { chainId: number; rpcUrl?: string; privateKey?: string; ipfs?: "pinata" | "helia" | "node" | "filecoinPin"; pinataJwt?: string };
+type SDKConfig = { chainId: number; rpcUrl?: string; overrideRpcUrls?: Record<number, string>; privateKey?: string; ipfs?: "pinata" | "helia" | "node" | "filecoinPin"; pinataJwt?: string };
 async function loadSDK() { return (await import("agent0-sdk")).SDK; }
 
 // ============================================================================
@@ -56,13 +56,23 @@ export function resolvePrivateKey(): string | null {
 /**
  * Build SDK config for the given chain.
  */
+import { getDrpcUrl, buildDrpcOverrides } from '../utils/chains.js';
+
 function buildConfig(
   chainId: number,
   privateKey?: string | null,
 ): SDKConfig {
   const config: any = { chainId };
 
-  if (RPC_URL) config.rpcUrl = RPC_URL;
+  // Primary chain RPC: explicit env var > dRPC > none (SDK defaults)
+  const rpcUrl = RPC_URL || getDrpcUrl(chainId);
+  if (rpcUrl) config.rpcUrl = rpcUrl;
+
+  // Override ALL known chains with dRPC URLs
+  if (process.env.DRPC_API_KEY) {
+    config.overrideRpcUrls = buildDrpcOverrides();
+  }
+
   if (privateKey) config.privateKey = privateKey;
 
   // Only configure IPFS when we have a private key (write operations need IPFS)
