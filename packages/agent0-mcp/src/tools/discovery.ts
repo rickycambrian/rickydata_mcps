@@ -510,6 +510,23 @@ async function handleSearchAgents(
     allResults = await sdk.searchAgents(filters, { sort: ["updatedAt:desc"] });
   }
 
+  // x402support fallback: some subgraphs silently drop the x402Support filter
+  // and return 0 results instead of throwing an error. Retry without the filter
+  // and apply it client-side.
+  if (args.x402support === true && allResults.length === 0 && hasSubgraphFilters) {
+    const broadFilters = { ...filters };
+    delete broadFilters.x402support;
+    const hasOtherFilters = Object.keys(broadFilters).some(k => k !== 'chains');
+    if (hasOtherFilters) {
+      const sdk = await getReadOnlySDK(chainId);
+      const broadResults = await sdk.searchAgents(broadFilters, { sort: ["updatedAt:desc"] });
+      allResults = broadResults.filter((a: any) => a.x402support === true);
+    } else {
+      const broadResults = await fetchAllAgentsGraceful(chainId);
+      allResults = broadResults.filter((a: any) => a.x402support === true);
+    }
+  }
+
   const agents = allResults.slice(0, limit).map((a: any) =>
     formatAgentSummary(a as unknown as Record<string, unknown>),
   );
