@@ -8,6 +8,7 @@ import { getChainName } from "../utils/chains.js";
 
 const KFDB_BASE_URL = process.env.KFDB_API_URL || "http://34.60.37.158";
 const KFDB_API_KEY = process.env.KFDB_API_KEY || "";
+const WALLET_ADDRESS = process.env.WALLET_ADDRESS || "";
 
 interface KfdbEntityResponse {
   label: string;
@@ -29,6 +30,9 @@ async function kfdbFetch(path: string, options?: RequestInit): Promise<Response>
   };
   if (KFDB_API_KEY) {
     headers["Authorization"] = `Bearer ${KFDB_API_KEY}`;
+  }
+  if (WALLET_ADDRESS) {
+    headers["X-Wallet-Address"] = WALLET_ADDRESS;
   }
   return fetch(url, { ...options, headers });
 }
