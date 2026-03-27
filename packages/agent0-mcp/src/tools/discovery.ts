@@ -3,6 +3,7 @@ import { computeTrustLabel } from "../utils/trust-labels.js";
 import { getChainName, CHAINS } from "../utils/chains.js";
 import {
   getAuthenticatedSDK,
+  getReadOnlySDK,
   hasAuthentication,
 } from "../auth/sdk-client.js";
 
@@ -24,10 +25,8 @@ const DEFAULT_CHAIN_ID = parseInt(process.env.AGENT0_CHAIN_ID || "8453", 10);
 // to retrieve all agents on any chain. Used for get_platform_stats and
 // search_agents when no filters are active.
 
-async function getReadOnlySDK(chainId?: number): Promise<any> {
-  const { SDK } = await import("agent0-sdk");
-  return new SDK({ chainId: chainId ?? DEFAULT_CHAIN_ID });
-}
+// getReadOnlySDK is imported from sdk-client.ts which uses buildConfig()
+// to inject dRPC overrides and all other configuration.
 
 // Cursor-based full fetch that bypasses The Graph's skip > 5000 limit.
 // Returns ALL agents with registrationFile on the given chain.
@@ -461,6 +460,20 @@ async function handleSearchAgents(
 
   const chainId = (args.chains as number[] | undefined)?.[0] ?? DEFAULT_CHAIN_ID;
 
+  // Guard: only chains with deployed contracts + subgraph can be searched
+  const SUBGRAPH_CHAINS = new Set([1, 8453, 137, 11155111, 84532]);
+  if (!SUBGRAPH_CHAINS.has(chainId)) {
+    return {
+      count: 0,
+      totalAvailable: 0,
+      chainId,
+      agents: [],
+      note: `Chain ${chainId} does not have on-chain ERC-8004 contract + subgraph support. ` +
+        `Supported chains: Ethereum (1), Base (8453), Polygon (137), Sepolia (11155111), Base Sepolia (84532). ` +
+        `For agents indexed on other chains via 8004scan, use kfdb_ecosystem_stats instead.`,
+    };
+  }
+
   const filters: Record<string, unknown> = {};
   if (args.name) filters.name = args.name;
   if (args.keyword) filters.keyword = args.keyword;
@@ -468,12 +481,21 @@ async function handleSearchAgents(
   if (args.a2aSkills) filters.a2aSkills = args.a2aSkills;
   if (args.oasfSkills) filters.oasfSkills = args.oasfSkills;
   if (args.oasfDomains) filters.oasfDomains = args.oasfDomains;
-  if (args.active !== undefined) filters.active = args.active;
-  if (args.x402support !== undefined) filters.x402support = args.x402support;
-  if (args.hasMCP !== undefined) filters.hasMCP = args.hasMCP;
-  if (args.hasA2A !== undefined) filters.hasA2A = args.hasA2A;
-  if (args.hasWeb !== undefined) filters.hasWeb = args.hasWeb;
-  if (args.hasOASF !== undefined) filters.hasOASF = args.hasOASF;
+  // MCP tool args may arrive as strings ("true"/"false") — parse to booleans
+  const parseBool = (v: unknown): boolean | undefined =>
+    v === true || v === "true" ? true : v === false || v === "false" ? false : undefined;
+  const activeVal = parseBool(args.active);
+  const x402Val = parseBool(args.x402support);
+  const hasMcpVal = parseBool(args.hasMCP);
+  const hasA2aVal = parseBool(args.hasA2A);
+  const hasWebVal = parseBool(args.hasWeb);
+  const hasOasfVal = parseBool(args.hasOASF);
+  if (activeVal !== undefined) filters.active = activeVal;
+  if (x402Val !== undefined) filters.x402support = x402Val;
+  if (hasMcpVal !== undefined) filters.hasMCP = hasMcpVal;
+  if (hasA2aVal !== undefined) filters.hasA2A = hasA2aVal;
+  if (hasWebVal !== undefined) filters.hasWeb = hasWebVal;
+  if (hasOasfVal !== undefined) filters.hasOASF = hasOasfVal;
   if (args.owners) filters.owners = args.owners;
   if (args.operators) filters.operators = args.operators;
   if (args.registeredAtFrom || args.registeredAtTo) {
@@ -513,7 +535,7 @@ async function handleSearchAgents(
   // x402support fallback: some subgraphs silently drop the x402Support filter
   // and return 0 results instead of throwing an error. Retry without the filter
   // and apply it client-side.
-  if (args.x402support === true && allResults.length === 0 && hasSubgraphFilters) {
+  if (x402Val === true && allResults.length === 0 && hasSubgraphFilters) {
     const broadFilters = { ...filters };
     delete broadFilters.x402support;
     const hasOtherFilters = Object.keys(broadFilters).some(k => k !== 'chains');
