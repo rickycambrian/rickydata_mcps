@@ -46,6 +46,24 @@ type RecentPaymentFailure = {
 
 const recentPaymentFailures = new Map<string, RecentPaymentFailure>();
 
+function parseBooleanArg(value: unknown): boolean | undefined {
+  if (value === true || value === false) return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  return undefined;
+}
+
+function parseNumberArg(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function buildDuplicatePaymentKey(
   url: string,
   method: string,
@@ -149,12 +167,13 @@ async function handleX402Request(
 
   const url = args.url as string;
   const method = ((args.method as string) ?? "GET").toUpperCase();
-  const autoPay = (args.autoPay as boolean) ?? true;
-  const maxPaymentUsd = (args.maxPaymentUsd as number) ?? 1.0;
+  const autoPay = parseBooleanArg(args.autoPay) ?? true;
+  const maxPaymentUsd = parseNumberArg(args.maxPaymentUsd) ?? 1.0;
   const headers = (args.headers as Record<string, string>) ?? {};
   const body = args.body as string | undefined;
-  const paymentChainId = typeof args.paymentChainId === "number"
-    ? args.paymentChainId
+  const parsedPaymentChainId = parseNumberArg(args.paymentChainId);
+  const paymentChainId = parsedPaymentChainId !== undefined
+    ? Math.trunc(parsedPaymentChainId)
     : undefined;
   const rpcUrls = buildDrpcOverrides();
 

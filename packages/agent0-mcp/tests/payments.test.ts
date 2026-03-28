@@ -83,6 +83,38 @@ describe("payments tools", () => {
       );
     });
 
+    it("treats string false as preview-only and does not issue a paid retry", async () => {
+      mocks.request.mockResolvedValue({
+        success: false,
+        status: "payment_required",
+        x402: true,
+        paymentAttempted: false,
+        selectedOffer: {
+          network: "eip155:8453",
+          chainId: 8453,
+          amount: "30000",
+        },
+        usableOffers: [
+          { network: "eip155:8453", balanceSufficient: true },
+        ],
+      });
+
+      const result = await handlePaymentsTool("x402_request", {
+        url: "https://paid.test/preview",
+        autoPay: "false",
+      }) as { status: string; paymentAttempted: boolean };
+
+      expect(result).toMatchObject({
+        status: "payment_required",
+        paymentAttempted: false,
+      });
+      expect(mocks.request).toHaveBeenCalledTimes(1);
+      expect(mocks.request).toHaveBeenCalledWith(
+        "https://paid.test/preview",
+        expect.objectContaining({ autoPay: false, method: "GET" }),
+      );
+    });
+
     it("previews first and then pays once when autoPay is true", async () => {
       mocks.request
         .mockResolvedValueOnce({
@@ -148,6 +180,60 @@ describe("payments tools", () => {
       );
       expect(mocks.constructor.mock.calls[0]?.[1]).not.toHaveProperty("chainId");
       expect(mocks.constructor.mock.calls[0]?.[1]).not.toHaveProperty("strictChainId");
+    });
+
+    it("treats string true and numeric strings as parsed MCP arguments", async () => {
+      mocks.request
+        .mockResolvedValueOnce({
+          success: false,
+          status: "payment_required",
+          x402: true,
+          paymentAttempted: false,
+          selectedOffer: {
+            network: "eip155:8453",
+            chainId: 8453,
+            amount: "500",
+          },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          status: "paid",
+          x402: true,
+          paymentAttempted: true,
+          selectedOffer: {
+            network: "eip155:8453",
+            chainId: 8453,
+            amount: "500",
+          },
+          result: { ok: true },
+        });
+
+      const result = await handlePaymentsTool("x402_request", {
+        url: "https://paid.test/string-args",
+        autoPay: "true",
+        maxPaymentUsd: "0.05",
+        paymentChainId: "8453",
+      }) as { status: string };
+
+      expect(result.status).toBe("paid");
+      expect(mocks.constructor).toHaveBeenCalledWith(
+        "0x" + "bb".repeat(32),
+        expect.objectContaining({
+          chainId: 8453,
+          strictChainId: true,
+          maxPaymentUsd: 0.05,
+        }),
+      );
+      expect(mocks.request).toHaveBeenNthCalledWith(
+        1,
+        "https://paid.test/string-args",
+        expect.objectContaining({ autoPay: false, maxPaymentUsd: 0.05 }),
+      );
+      expect(mocks.request).toHaveBeenNthCalledWith(
+        2,
+        "https://paid.test/string-args",
+        expect.objectContaining({ autoPay: true, maxPaymentUsd: 0.05 }),
+      );
     });
 
     it("passes explicit paymentChainId as a strict override to the SDK client", async () => {
