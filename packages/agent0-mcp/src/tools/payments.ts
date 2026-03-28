@@ -3,6 +3,8 @@ import {
   hasAuthentication,
   resolvePrivateKey,
 } from "../auth/sdk-client.js";
+import { buildDrpcOverrides } from "../utils/chains.js";
+
 // X402Client loaded lazily to avoid import failures in CI where rickydata may be incomplete
 let _X402Client: any = null;
 async function getX402Client(): Promise<any> {
@@ -13,8 +15,71 @@ async function getX402Client(): Promise<any> {
   return _X402Client;
 }
 
-// Default payment chain: Base mainnet (8453) — most x402 agents accept USDC on Base
-const DEFAULT_PAYMENT_CHAIN = 8453;
+const DUPLICATE_PAYMENT_TTL_MS = 120_000;
+
+type X402SelectedOffer = {
+  network?: string;
+  chainId?: number | null;
+  amount?: string;
+};
+
+type X402ToolResult = {
+  success?: boolean;
+  status?: string;
+  x402?: boolean;
+  error?: string;
+  serverReason?: string;
+  httpStatus?: number;
+  paymentDetails?: unknown;
+  usableOffers?: unknown[];
+  selectedOffer?: X402SelectedOffer;
+  paymentAttempted?: boolean;
+  result?: unknown;
+  payment?: unknown;
+};
+
+type RecentPaymentFailure = {
+  error: string;
+  serverReason?: string;
+  expiresAt: number;
+};
+
+const recentPaymentFailures = new Map<string, RecentPaymentFailure>();
+
+function buildDuplicatePaymentKey(
+  url: string,
+  method: string,
+  body: string | undefined,
+  network: string,
+): string {
+  return JSON.stringify([url, method, body ?? "", network]);
+}
+
+function getRecentPaymentFailure(key: string): RecentPaymentFailure | null {
+  const cached = recentPaymentFailures.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    recentPaymentFailures.delete(key);
+    return null;
+  }
+  return cached;
+}
+
+function rememberPaymentFailure(
+  key: string,
+  error: string,
+  serverReason?: string,
+): void {
+  recentPaymentFailures.set(key, {
+    error,
+    serverReason,
+    expiresAt: Date.now() + DUPLICATE_PAYMENT_TTL_MS,
+  });
+}
+
+function clearPaymentFailure(key: string): void {
+  recentPaymentFailures.delete(key);
+}
 
 export const paymentsTools: Tool[] = [
   {
@@ -22,7 +87,8 @@ export const paymentsTools: Tool[] = [
     description:
       "Make an HTTP request with built-in x402 payment handling. " +
       "If the server returns 402 Payment Required, inspects payment requirements and optionally pays. " +
-      "Requires configured wallet (via configure_wallet) with USDC on the payment chain (default: Base).",
+      "When autoPay is enabled the tool previews the payment offer first, then makes a single paid retry. " +
+      "Requires configured wallet (via configure_wallet) with USDC on a supported payment chain.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -57,7 +123,7 @@ export const paymentsTools: Tool[] = [
         paymentChainId: {
           type: "number",
           description:
-            "Chain ID for x402 payment (default: 8453 Base). Must match a chain where the wallet has USDC.",
+            "Optional strict payment chain override. When omitted, the first funded supported offer is selected automatically.",
         },
       },
       required: ["url"],
@@ -72,8 +138,6 @@ export const paymentsTools: Tool[] = [
 async function handleX402Request(
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const paymentChainId = (args.paymentChainId as number) ?? DEFAULT_PAYMENT_CHAIN;
-
   if (!hasAuthentication()) {
     return {
       error: "No wallet configured. Call configure_wallet first with your wallet signature.",
@@ -89,14 +153,78 @@ async function handleX402Request(
   const maxPaymentUsd = (args.maxPaymentUsd as number) ?? 1.0;
   const headers = (args.headers as Record<string, string>) ?? {};
   const body = args.body as string | undefined;
+  const paymentChainId = typeof args.paymentChainId === "number"
+    ? args.paymentChainId
+    : undefined;
+  const rpcUrls = buildDrpcOverrides();
 
   const X402Client = await getX402Client();
   if (!X402Client) return { error: "X402Client not available — rickydata SDK may need updating." };
-  const client = new X402Client(privateKey, { chainId: paymentChainId, maxPaymentUsd });
+  const client = new X402Client(privateKey, {
+    ...(paymentChainId !== undefined ? { chainId: paymentChainId, strictChainId: true } : {}),
+    maxPaymentUsd,
+    rpcUrls,
+  });
 
   try {
-    const res = await client.request(url, { method, headers, body, autoPay, maxPaymentUsd });
-    return res;
+    const requestOptions = { method, headers, body, maxPaymentUsd };
+    if (!autoPay) {
+      return await client.request(url, { ...requestOptions, autoPay: false });
+    }
+
+    const preview = await client.request(url, {
+      ...requestOptions,
+      autoPay: false,
+    }) as X402ToolResult;
+
+    if (preview.status !== "payment_required") {
+      return preview;
+    }
+
+    const previewNetwork = preview.selectedOffer?.network;
+    if (previewNetwork) {
+      const duplicateKey = buildDuplicatePaymentKey(url, method, body, previewNetwork);
+      const cachedFailure = getRecentPaymentFailure(duplicateKey);
+      if (cachedFailure) {
+        const retryAfterSeconds = Math.max(
+          1,
+          Math.ceil((cachedFailure.expiresAt - Date.now()) / 1000),
+        );
+        return {
+          ...preview,
+          success: false,
+          status: "payment_rejected",
+          error:
+            `Blocked duplicate auto-pay attempt after a recent paid failure on ${previewNetwork}. ` +
+            `Last failure: ${cachedFailure.error}`,
+          serverReason: cachedFailure.serverReason ?? preview.serverReason,
+          paymentAttempted: false,
+          duplicatePaymentBlocked: true,
+          retryAfterSeconds,
+        };
+      }
+    }
+
+    const result = await client.request(url, {
+      ...requestOptions,
+      autoPay: true,
+    }) as X402ToolResult;
+
+    const selectedNetwork = result.selectedOffer?.network ?? previewNetwork;
+    if (selectedNetwork) {
+      const duplicateKey = buildDuplicatePaymentKey(url, method, body, selectedNetwork);
+      if (result.success) {
+        clearPaymentFailure(duplicateKey);
+      } else if (result.paymentAttempted) {
+        rememberPaymentFailure(
+          duplicateKey,
+          result.error ?? "Payment failed",
+          result.serverReason,
+        );
+      }
+    }
+
+    return result;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return { success: false, error: msg, paymentChainId };
