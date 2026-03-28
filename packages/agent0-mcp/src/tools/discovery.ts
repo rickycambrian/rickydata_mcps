@@ -439,6 +439,67 @@ export const discoveryTools: Tool[] = [
 async function handleSearchAgents(
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  // Compatibility shim: some chat runtimes wrap structured filters into
+  // a single `query` field as a JSON string or object.
+  const queryArg = args.query;
+  if (queryArg !== undefined) {
+    const assignQueryField = (key: string, value: unknown) => {
+      if (args[key] === undefined && value !== undefined) {
+        args[key] = value;
+      }
+    };
+
+    let parsedQuery: Record<string, unknown> | null = null;
+    if (typeof queryArg === "string") {
+      const trimmed = queryArg.trim();
+      if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+        try {
+          const candidate = JSON.parse(trimmed);
+          if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+            parsedQuery = candidate as Record<string, unknown>;
+          }
+        } catch {
+          // Fall through to keyword compatibility below
+        }
+      }
+
+      if (!parsedQuery && trimmed && args.name === undefined && args.keyword === undefined) {
+        args.keyword = trimmed;
+      }
+    } else if (queryArg && typeof queryArg === "object" && !Array.isArray(queryArg)) {
+      parsedQuery = queryArg as Record<string, unknown>;
+    }
+
+    if (parsedQuery) {
+      const supportedQueryFields = [
+        "name",
+        "keyword",
+        "mcpTools",
+        "a2aSkills",
+        "oasfSkills",
+        "oasfDomains",
+        "active",
+        "x402support",
+        "hasMCP",
+        "hasA2A",
+        "hasWeb",
+        "hasOASF",
+        "owners",
+        "operators",
+        "registeredAtFrom",
+        "registeredAtTo",
+        "chains",
+        "chainId",
+        "minFeedbackValue",
+        "limit",
+      ] as const;
+
+      for (const key of supportedQueryFields) {
+        assignQueryField(key, parsedQuery[key]);
+      }
+    }
+  }
+
   // Compatibility shim: MCP gateway may expose `chainId` (number) instead of `chains` (array)
   if (args.chainId !== undefined && !args.chains) {
     args.chains = [args.chainId as number];

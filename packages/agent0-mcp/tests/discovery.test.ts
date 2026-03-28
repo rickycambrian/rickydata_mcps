@@ -187,6 +187,49 @@ describe("discovery tools", () => {
       );
     });
 
+    it("parses JSON query payloads into structured filters", async () => {
+      const mocks = await getMocks();
+      mocks.mockSearchAgents.mockResolvedValue([]);
+      const { SDK } = await import("agent0-sdk");
+      (SDK as ReturnType<typeof vi.fn>).mockClear();
+
+      await handleDiscoveryTool("search_agents", {
+        query: JSON.stringify({
+          active: true,
+          x402support: true,
+          chains: [137],
+        }),
+      });
+
+      expect(SDK).toHaveBeenCalledWith(
+        expect.objectContaining({ chainId: 137 }),
+      );
+      expect(mocks.mockSearchAgents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          active: true,
+          x402support: true,
+          chains: [137],
+        }),
+        expect.any(Object),
+      );
+    });
+
+    it("maps plain query strings to keyword searches", async () => {
+      const mocks = await getMocks();
+      mocks.mockSearchAgents.mockResolvedValue([]);
+
+      await handleDiscoveryTool("search_agents", {
+        query: "security scanner",
+      });
+
+      expect(mocks.mockSearchAgents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          keyword: "security scanner",
+        }),
+        expect.any(Object),
+      );
+    });
+
     it("converts chainId (number) to chains array via compatibility shim", async () => {
       const mocks = await getMocks();
       mocks.mockSearchAgents.mockResolvedValue([]);
@@ -218,7 +261,7 @@ describe("discovery tools", () => {
       );
     });
 
-    it("uses Ethereum mainnet (1) as default when no chain specified", async () => {
+    it("uses Base mainnet (8453) as default when no chain specified", async () => {
       const mocks = await getMocks();
       mocks.mockSearchAgents.mockResolvedValue([]);
       const { SDK } = await import("agent0-sdk");
@@ -226,9 +269,9 @@ describe("discovery tools", () => {
 
       await handleDiscoveryTool("search_agents", {});
 
-      // Default should be chain 1 (Ethereum mainnet), NOT 11155111 (Sepolia)
+      // Default should be Base mainnet (8453) for wallet + x402-aligned flows
       expect(SDK).toHaveBeenCalledWith(
-        expect.objectContaining({ chainId: 1 }),
+        expect.objectContaining({ chainId: 8453 }),
       );
     });
   });
@@ -253,7 +296,7 @@ describe("discovery tools", () => {
 
       expect(result.name).toBe("DeFi Bot");
       expect(result.reputation.trustLabel).toBe("Trusted");
-      expect(result.chain).toContain("Chain"); // getChainName for 11155111 returns fallback
+      expect(result.chain).toBe("Sepolia");
     });
 
     it("returns error for missing agentId", async () => {
@@ -520,7 +563,7 @@ describe("discovery tools", () => {
         };
       };
 
-      expect(result.chainId).toBe(1); // Default is now Ethereum mainnet
+      expect(result.chainId).toBe(8453); // Default is Base mainnet
       expect(result.registries.identity).toMatch(/^0x/);
       expect(result.registries.reputation).toMatch(/^0x/);
       expect(mocks.mockRegistries).toHaveBeenCalled();
