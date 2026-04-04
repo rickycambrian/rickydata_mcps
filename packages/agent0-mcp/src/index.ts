@@ -6,6 +6,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { TOOLS, handleToolCall } from "./tools/index.js";
+import { clearKey } from "./auth/sdk-client.js";
 
 // ============================================================================
 // CONFIGURATION
@@ -107,6 +108,8 @@ if (!isHttp) {
         session.transport.close();
         session.server.close();
         sessions.delete(id);
+        // Clear any stored private keys for this session
+        clearKey();
       }
     }
   }, 5 * 60 * 1000);

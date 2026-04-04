@@ -13,6 +13,8 @@ import {
   getReadOnlySDK,
   getAuthenticatedSDK,
   setDerivedKey,
+  injectPrivateKey,
+  clearKey,
   hasAuthentication,
   getCurrentChainId,
   setChainId,
@@ -25,7 +27,8 @@ describe("sdk-client", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // Reset module state by clearing cached SDK instances
+    // Reset module state by clearing cached SDK instances and keys
+    clearKey();
     setChainId(11155111);
     delete process.env.ERC8004_PRIVATE_KEY;
     delete process.env.ERC8004_DERIVED_KEY;
@@ -138,6 +141,68 @@ describe("sdk-client", () => {
       process.env.ERC8004_PRIVATE_KEY = "0x1234";
       const status = getAuthStatus();
       expect(status.source).toBe("env:ERC8004_PRIVATE_KEY");
+    });
+
+    it("returns injected source after injectPrivateKey", () => {
+      injectPrivateKey("0xinjectedkey");
+      const status = getAuthStatus();
+      expect(status.hasKey).toBe(true);
+      expect(status.source).toBe("injected");
+      expect(status.isReadOnly).toBe(false);
+    });
+
+    it("env key takes priority over injected key", () => {
+      injectPrivateKey("0xinjectedkey");
+      process.env.ERC8004_PRIVATE_KEY = "0x1234";
+      const status = getAuthStatus();
+      expect(status.source).toBe("env:ERC8004_PRIVATE_KEY");
+    });
+  });
+
+  describe("injectPrivateKey", () => {
+    it("makes hasAuthentication return true", () => {
+      expect(hasAuthentication()).toBe(false);
+      injectPrivateKey("0xinjectedkey");
+      expect(hasAuthentication()).toBe(true);
+    });
+
+    it("enables getAuthenticatedSDK", async () => {
+      const before = await getAuthenticatedSDK();
+      expect(before).toBeNull();
+
+      injectPrivateKey("0xinjectedkey");
+      const after = await getAuthenticatedSDK();
+      expect(after).not.toBeNull();
+    });
+  });
+
+  describe("clearKey", () => {
+    it("resets to read-only mode after setDerivedKey", () => {
+      setDerivedKey("0xdeadbeef");
+      expect(hasAuthentication()).toBe(true);
+
+      clearKey();
+      expect(hasAuthentication()).toBe(false);
+      expect(getAuthStatus().source).toBe("none");
+    });
+
+    it("resets to read-only mode after injectPrivateKey", () => {
+      injectPrivateKey("0xinjectedkey");
+      expect(getAuthStatus().source).toBe("injected");
+
+      clearKey();
+      expect(hasAuthentication()).toBe(false);
+      expect(getAuthStatus().source).toBe("none");
+    });
+
+    it("getAuthenticatedSDK returns null after clearKey", async () => {
+      injectPrivateKey("0xinjectedkey");
+      const before = await getAuthenticatedSDK();
+      expect(before).not.toBeNull();
+
+      clearKey();
+      const after = await getAuthenticatedSDK();
+      expect(after).toBeNull();
     });
   });
 });

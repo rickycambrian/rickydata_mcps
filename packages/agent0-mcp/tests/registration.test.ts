@@ -126,30 +126,14 @@ describe("registration tools", () => {
   // configure_wallet
   // ===========================================================================
   describe("configure_wallet", () => {
-    it("configures with direct private key", async () => {
+    it("rejects direct private key with deprecation error", async () => {
       const key = "0x" + "ab".repeat(32);
       const result = (await handleRegistrationTool("configure_wallet", {
         privateKey: key,
-      })) as { success: boolean; method: string };
-
-      expect(result.success).toBe(true);
-      expect(result.method).toBe("direct_key");
-    });
-
-    it("rejects invalid private key format (no 0x)", async () => {
-      const result = (await handleRegistrationTool("configure_wallet", {
-        privateKey: "ab".repeat(32),
       })) as { error: string };
 
-      expect(result.error).toContain("Invalid private key");
-    });
-
-    it("rejects private key with wrong length", async () => {
-      const result = (await handleRegistrationTool("configure_wallet", {
-        privateKey: "0x1234",
-      })) as { error: string };
-
-      expect(result.error).toContain("Invalid private key");
+      expect(result.error).toContain("no longer supported");
+      expect(result.error).toContain("injected server-side");
     });
 
     it("configures with signature derivation", async () => {
@@ -175,6 +159,17 @@ describe("registration tools", () => {
       expect(result.error).toContain("Signature verification failed");
     });
 
+    it("accepts address-only config (gateway auto-config)", async () => {
+      const result = (await handleRegistrationTool("configure_wallet", {
+        walletAddress: "0x1234567890abcdef",
+        chainId: 8453,
+      })) as { success: boolean; method: string; walletAddress: string };
+
+      expect(result.success).toBe(true);
+      expect(result.method).toBe("address_only");
+      expect(result.walletAddress).toBe("0x1234567890abcdef");
+    });
+
     it("sets chain only when no key or signature", async () => {
       const result = (await handleRegistrationTool("configure_wallet", {
         chainId: 8453,
@@ -190,7 +185,7 @@ describe("registration tools", () => {
         error: string;
       };
 
-      expect(result.error).toContain("Provide either privateKey or signature");
+      expect(result.error).toContain("wallet signature or walletAddress");
     });
   });
 

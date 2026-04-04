@@ -132,12 +132,37 @@ export async function getAuthenticatedSDK(chainId?: number): Promise<any | null>
   return _authenticatedSDK;
 }
 
+/** Track how the current key was set — 'derived' from signature, 'injected' by gateway. */
+let _keySource: 'derived' | 'injected' | null = null;
+
 /**
  * Set the derived private key (from wallet signature derivation).
  * Clears cached authenticated SDK so it's rebuilt on next access.
  */
 export function setDerivedKey(privateKey: string): void {
   _currentPrivateKey = privateKey;
+  _keySource = 'derived';
+  _authenticatedSDK = null;
+}
+
+/**
+ * Inject a private key from the hosting gateway (server-side).
+ * NOT exposed as an MCP tool — only callable programmatically.
+ * Clears cached authenticated SDK so it's rebuilt on next access.
+ */
+export function injectPrivateKey(privateKey: string): void {
+  _currentPrivateKey = privateKey;
+  _keySource = 'injected';
+  _authenticatedSDK = null;
+}
+
+/**
+ * Clear the stored private key and reset to read-only mode.
+ * Call on session cleanup to avoid key leakage across sessions.
+ */
+export function clearKey(): void {
+  _currentPrivateKey = null;
+  _keySource = null;
   _authenticatedSDK = null;
 }
 
@@ -170,13 +195,13 @@ export function setChainId(chainId: number): void {
 export function getAuthStatus(): {
   hasKey: boolean;
   chainId: number;
-  source: "env:ERC8004_PRIVATE_KEY" | "env:ERC8004_DERIVED_KEY" | "derived" | "none";
+  source: "env:ERC8004_PRIVATE_KEY" | "env:ERC8004_DERIVED_KEY" | "derived" | "injected" | "none";
   isReadOnly: boolean;
 } {
-  let source: "env:ERC8004_PRIVATE_KEY" | "env:ERC8004_DERIVED_KEY" | "derived" | "none" = "none";
+  let source: "env:ERC8004_PRIVATE_KEY" | "env:ERC8004_DERIVED_KEY" | "derived" | "injected" | "none" = "none";
   if (process.env.ERC8004_PRIVATE_KEY) source = "env:ERC8004_PRIVATE_KEY";
   else if (process.env.ERC8004_DERIVED_KEY) source = "env:ERC8004_DERIVED_KEY";
-  else if (_currentPrivateKey) source = "derived";
+  else if (_currentPrivateKey && _keySource) source = _keySource;
 
   return {
     hasKey: source !== "none",

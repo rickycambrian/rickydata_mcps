@@ -18,15 +18,15 @@ export const registrationTools: Tool[] = [
     name: "configure_wallet",
     description:
       "Configure wallet for ERC-8004 write operations (register, feedback, etc.). " +
-      "Provide either a private key directly OR a wallet signature for key derivation. " +
+      "Provide a wallet signature for key derivation, or just a walletAddress for address-only config. " +
       "Also sets the target chain. Must be called before any write operation.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        privateKey: {
+        walletAddress: {
           type: "string",
           description:
-            "Hex private key (0x-prefixed). Use this if you have a dedicated agent key.",
+            "Wallet address for address-only configuration (key injected server-side by gateway).",
         },
         signature: {
           type: "string",
@@ -42,7 +42,7 @@ export const registrationTools: Tool[] = [
         chainId: {
           type: "number",
           description:
-            "Target chain ID (default: 11155111 Sepolia). Use 1 for Ethereum Mainnet, 8453 for Base.",
+            "Target chain ID (default: 8453 Base). Use 1 for Ethereum Mainnet.",
         },
       },
     },
@@ -208,19 +208,12 @@ async function handleConfigureWallet(
     setChainId(args.chainId as number);
   }
 
+  // Reject raw private keys — keys are now injected server-side by the gateway
   if (args.privateKey) {
-    // Direct private key
-    const key = args.privateKey as string;
-    if (!key.startsWith("0x") || key.length !== 66) {
-      return { error: "Invalid private key format. Must be 0x-prefixed 32-byte hex." };
-    }
-    setDerivedKey(key);
-    const status = getAuthStatus();
     return {
-      success: true,
-      method: "direct_key",
-      chainId: status.chainId,
-      chain: getChainName(status.chainId),
+      error: "Direct private key input is no longer supported. " +
+        "Keys are injected server-side by the hosting gateway. " +
+        "Use a wallet signature (get_derivation_message + signature) for manual ERC-8004 identity setup.",
     };
   }
 
@@ -255,20 +248,25 @@ async function handleConfigureWallet(
     };
   }
 
-  // No key or signature — just set chain
-  if (args.chainId) {
+  // Address-only config (gateway auto-config) or chain-only update
+  if (args.walletAddress || args.chainId) {
+    const status = getAuthStatus();
     return {
       success: true,
-      method: "chain_only",
-      chainId: args.chainId,
-      chain: getChainName(args.chainId as number),
-      note: "Chain updated. No signing key configured — read-only mode.",
+      method: args.walletAddress ? "address_only" : "chain_only",
+      ...(args.walletAddress ? { walletAddress: args.walletAddress } : {}),
+      chainId: status.chainId,
+      chain: getChainName(status.chainId),
+      hasKey: status.hasKey,
+      note: status.hasKey
+        ? "Wallet configured. Signing key available (injected by gateway)."
+        : "Address registered. Signing key not yet available — x402 payments will be handled by the gateway.",
     };
   }
 
   return {
     error:
-      "Provide either privateKey or signature. Use get_derivation_message to get the message to sign.",
+      "Provide a wallet signature or walletAddress. Use get_derivation_message to get the message to sign.",
   };
 }
 
