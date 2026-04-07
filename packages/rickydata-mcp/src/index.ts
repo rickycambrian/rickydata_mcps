@@ -18,6 +18,11 @@ import {
   isCodeIntelligenceTool,
   handleCodeIntelligenceTool,
 } from "./code-intelligence-tools.js";
+import {
+  getTeeSecurityToolDefinitions,
+  isTeeSecurityTool,
+  handleTeeSecurityTool,
+} from "./tee-security-tools.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { RickydataOAuthProvider, oauthCompleteHandler, oauthCallbackHandler, pruneOAuthStores } from "./oauth.js";
@@ -1211,7 +1216,7 @@ const WALLET_TOOLS = [
   },
 ];
 
-const TOOLS = [...CANVAS_TOOLS, ...AGENT_TOOLS, ...A2A_TOOLS, ...WALLET_TOOLS, ...MARKETPLACE_TOOLS, ...getAnswerSheetToolDefinitions(), ...getCodeIntelligenceToolDefinitions()];
+const TOOLS = [...CANVAS_TOOLS, ...AGENT_TOOLS, ...A2A_TOOLS, ...WALLET_TOOLS, ...MARKETPLACE_TOOLS, ...getAnswerSheetToolDefinitions(), ...getCodeIntelligenceToolDefinitions(), ...getTeeSecurityToolDefinitions()];
 
 // ============================================================================
 // CANVAS TOOL HANDLERS
@@ -2960,6 +2965,8 @@ function setupMCPHandlers(server: Server, marketplace: MarketplaceManager): void
         result = await handleAnswerSheetTool(name, args);
       } else if (isCodeIntelligenceTool(name)) {
         result = await handleCodeIntelligenceTool(name, args);
+      } else if (isTeeSecurityTool(name)) {
+        result = await handleTeeSecurityTool(name, args);
       } else {
         result = { error: `Unknown tool: ${name}` };
       }
@@ -3070,6 +3077,8 @@ if (isStdio) {
         result = await handleAnswerSheetTool(name, args);
       } else if (isCodeIntelligenceTool(name)) {
         result = await handleCodeIntelligenceTool(name, args);
+      } else if (isTeeSecurityTool(name)) {
+        result = await handleTeeSecurityTool(name, args);
       } else {
         result = { error: `Unknown tool: ${name}` };
       }
