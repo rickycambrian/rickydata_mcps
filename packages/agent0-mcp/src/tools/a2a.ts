@@ -187,9 +187,35 @@ async function handleSendMessage(
   const a2aClient = sdk.createA2AClient(agentSummary);
 
   // Send message
-  const result = await (a2aClient as any).messageA2A(message, {
+  let result = await (a2aClient as any).messageA2A(message, {
     taskId: (args.taskId as string) ?? undefined,
   });
+
+  // Auto-pay x402 if the agent requires payment and payFirst is available
+  if (result && typeof result === 'object' && 'x402Required' in result && result.x402Required) {
+    const x402 = result.x402Payment;
+    if (x402?.payFirst) {
+      try {
+        result = await x402.payFirst();
+      } catch (e) {
+        return {
+          success: false,
+          error: `x402 payment failed: ${(e as Error).message}`,
+          agentId,
+          chain: getChainName(parseChainId(agentId)),
+          x402: { accepts: x402.accepts, price: x402.price, network: x402.network },
+        };
+      }
+    } else {
+      // payFirst not available — return x402 challenge for manual payment
+      return {
+        success: true,
+        agentId,
+        chain: getChainName(parseChainId(agentId)),
+        response: result,
+      };
+    }
+  }
 
   const chainId = parseChainId(agentId);
   return {
@@ -302,7 +328,18 @@ async function handleTaskMessage(
   }
 
   const a2aClient = sdk.createA2AClient(agentSummary);
-  const result = await (a2aClient as any).messageA2A(message, { taskId });
+  let result = await (a2aClient as any).messageA2A(message, { taskId });
+
+  // Auto-pay x402 if required
+  if (result && typeof result === 'object' && 'x402Required' in result && result.x402Required) {
+    if (result.x402Payment?.payFirst) {
+      try {
+        result = await result.x402Payment.payFirst();
+      } catch (e) {
+        return { success: false, error: `x402 payment failed: ${(e as Error).message}`, agentId, taskId };
+      }
+    }
+  }
 
   const chainId = parseChainId(agentId);
   return {
