@@ -10,6 +10,9 @@ import {
   kfdbWrite,
   kfdbSemanticSearch,
   storeChunkEmbedding,
+  paperId,
+  chunkNodeId,
+  chunkFilePath,
   wrapString,
   wrapInteger,
   type WriteOp,
@@ -53,12 +56,6 @@ async function writeLocal(artifact: StoredPaperArtifact): Promise<void> {
 
 // ── KFDB Persistence ──────────────────────────────────────────────────────
 
-const PAPER_ID_PREFIX = "ResearchPaper://";
-
-function paperId(arxivId: string): string {
-  return `${PAPER_ID_PREFIX}${arxivId}`;
-}
-
 async function writePaperToKfdb(artifact: StoredPaperArtifact): Promise<void> {
   const ops: WriteOp[] = [];
 
@@ -79,17 +76,18 @@ async function writePaperToKfdb(artifact: StoredPaperArtifact): Promise<void> {
       section_count: wrapInteger(artifact.sections.length),
       chunk_count: wrapInteger(artifact.chunks.length),
       guide_json: wrapString(JSON.stringify(artifact.guide)),
+      enrichment_status: wrapString("pending"),
     },
   });
 
   // Write chunks as separate nodes for semantic search
   for (const chunk of artifact.chunks) {
-    // ID and file_path match the file-embeddings URI: ResearchPaper://{id}/chunk-{ordinal}
-    const chunkFilePath = `${PAPER_ID_PREFIX}${artifact.arxivId}/chunk-${chunk.ordinal}`;
+    const cId = chunkNodeId(artifact.arxivId, chunk.ordinal);
+    const cFilePath = chunkFilePath(artifact.arxivId, chunk.ordinal);
     ops.push({
       operation: "create_node",
       label: "PaperChunk",
-      id: chunkFilePath,
+      id: cId,
       properties: {
         arxiv_id: wrapString(artifact.arxivId),
         paper_title: wrapString(artifact.title),
@@ -98,7 +96,7 @@ async function writePaperToKfdb(artifact: StoredPaperArtifact): Promise<void> {
         ordinal: wrapInteger(chunk.ordinal),
         chunk_index: wrapInteger(chunk.chunkIndex),
         text: wrapString(chunk.text),
-        file_path: wrapString(chunkFilePath),
+        file_path: wrapString(cFilePath),
       },
     });
 
@@ -107,7 +105,7 @@ async function writePaperToKfdb(artifact: StoredPaperArtifact): Promise<void> {
       operation: "create_edge",
       edge_type: "HAS_CHUNK",
       from_id: paperId(artifact.arxivId),
-      to_id: chunkFilePath,
+      to_id: cId,
     });
 
     // Batch writes in groups of 50 to avoid oversized requests

@@ -2,8 +2,34 @@
 // KFDB API CLIENT — Research Papers MCP
 // ============================================================================
 
+import { v5 as uuidv5 } from "uuid";
 import { KFDB_API_URL, KFDB_API_KEY } from "./config.js";
 import type { PaperChunk } from "./parser.js";
+
+// ---------------------------------------------------------------------------
+// Deterministic UUID v5 — must match Rust PAPER_NS in paper_enrichment.rs
+// ---------------------------------------------------------------------------
+
+/** Same 16 bytes as Rust: Uuid::from_bytes([0x6b,0x66,...]) = "kfdb-paper-ns-ui" */
+const PAPER_NS = new Uint8Array([
+  0x6b, 0x66, 0x64, 0x62, 0x2d, 0x70, 0x61, 0x70,
+  0x65, 0x72, 0x2d, 0x6e, 0x73, 0x2d, 0x75, 0x69,
+]);
+
+/** Deterministic UUID for a ResearchPaper node. Matches Rust paper_id(). */
+export function paperId(arxivId: string): string {
+  return uuidv5(`research-paper:${arxivId}`, PAPER_NS);
+}
+
+/** Deterministic UUID for a PaperChunk node. */
+export function chunkNodeId(arxivId: string, ordinal: number): string {
+  return uuidv5(`paper-chunk:${arxivId}:${ordinal}`, PAPER_NS);
+}
+
+/** file_path key for file-embeddings API (semantic search index). */
+export function chunkFilePath(arxivId: string, ordinal: number): string {
+  return `ResearchPaper://${arxivId}/chunk-${ordinal}`;
+}
 
 export async function kfdbFetch(
   path: string,
@@ -183,7 +209,7 @@ export async function storeChunkEmbedding(
   await kfdbFetch("/api/v1/file-embeddings/store-content", {
     method: "POST",
     body: JSON.stringify({
-      file_path: `ResearchPaper://${arxivId}/chunk-${chunk.ordinal}`,
+      file_path: chunkFilePath(arxivId, chunk.ordinal),
       content: chunk.text,
       repo_name: "research-papers",
     }),
@@ -245,7 +271,7 @@ export async function storePaperNode(meta: PaperNodeMetadata): Promise<unknown> 
   const op: CreateNodeOp = {
     operation: "create_node",
     label: "ResearchPaper",
-    id: `ResearchPaper://${meta.arxivId}`,
+    id: paperId(meta.arxivId),
     properties: {
       arxiv_id: wrapString(meta.arxivId),
       title: wrapString(meta.title),
