@@ -38,12 +38,27 @@ jobs:
           rm -rf dist
           npx tsc --skipLibCheck
 
-      - name: Verify tool count
+      - name: Verify tool count and export tool definitions
         id: tools
         run: |
+          # Export tool count AND full tool definitions (tools_available) for KFDB
+          node -e "
+            import('./dist/tools/index.js').then(m => {
+              const tools = m.TOOLS;
+              console.log('Tool count: ' + tools.length);
+
+              // Write tool definitions as JSON for KFDB tools_available
+              const toolDefs = tools.map(t => ({
+                name: t.name,
+                description: t.description || '',
+                inputSchema: t.inputSchema || {},
+              }));
+              require('fs').writeFileSync('/tmp/tools_available.json', JSON.stringify(toolDefs));
+              console.log('Wrote ' + toolDefs.length + ' tool definitions to /tmp/tools_available.json');
+            });
+          "
           TOOL_COUNT=$(node -e "import('./dist/tools/index.js').then(m => console.log(m.TOOLS.length))")
           echo "tool_count=$TOOL_COUNT" >> $GITHUB_OUTPUT
-          echo "Tool count: $TOOL_COUNT"
           if [ "$TOOL_COUNT" -lt 25 ]; then
             echo "::error::Expected at least 25 tools (20 + 5 KFDB), got $TOOL_COUNT"
             exit 1
@@ -86,25 +101,40 @@ jobs:
             -f "client_payload[package]=@rickydata/agent0-mcp" \
             -f "client_payload[version]=${{ steps.ver.outputs.version }}" || true
 
-      - name: Update KFDB MCPServer entity
+      - name: Update KFDB MCPServer entity (version + tools_available)
         if: steps.publish.outcome == 'success'
         run: |
-          # Update the MCPServer entity (55abe175) with new version + tool count
+          # Build KFDB payload with tools_available from the build step
+          # CRITICAL: tools_available MUST be included or the MCP gateway's ToolAggregator
+          # won't create slug-based tool names, causing "Server not found" errors.
+          TOOLS_JSON=$(cat /tmp/tools_available.json)
+          node -e "
+            const fs = require('fs');
+            const tools = JSON.parse(fs.readFileSync('/tmp/tools_available.json', 'utf8'));
+            const payload = {
+              operations: [{
+                operation: 'update_node',
+                id: '55abe175-5f8d-436b-98ec-98fb87a655c4',
+                properties: {
+                  version: { String: '${{ steps.ver.outputs.version }}' },
+                  tools_count: { Integer: tools.length },
+                  tools_available: { String: JSON.stringify(tools) },
+                  install_command: { String: 'npx -y @rickydata/agent0-mcp@${{ steps.ver.outputs.version }}' },
+                  run_command: { String: 'npx -y @rickydata/agent0-mcp@${{ steps.ver.outputs.version }}' },
+                  enriched_at: { String: new Date().toISOString() },
+                  enrichment_version: { Integer: 5 },
+                },
+              }],
+            };
+            fs.writeFileSync('/tmp/kfdb-payload.json', JSON.stringify(payload));
+            console.log('KFDB payload: ' + tools.length + ' tools, version ${{ steps.ver.outputs.version }}');
+          "
           curl -sf -X POST "${{ vars.KFDB_URL || 'http://34.60.37.158' }}/api/v1/write" \
             -H "Authorization: Bearer ${{ secrets.KFDB_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"operations\": [{
-                \"operation\": \"update_node\",
-                \"id\": \"55abe175-5f8d-436b-98ec-98fb87a655c4\",
-                \"properties\": {
-                  \"version\": { \"String\": \"${{ steps.ver.outputs.version }}\" },
-                  \"tools_count\": { \"Integer\": ${{ steps.tools.outputs.tool_count }} },
-                  \"install_command\": { \"String\": \"npx -y @rickydata/agent0-mcp@${{ steps.ver.outputs.version }}\" },
-                  \"run_command\": { \"String\": \"npx -y @rickydata/agent0-mcp@${{ steps.ver.outputs.version }}\" }
-                }
-              }]
-            }" && echo "::notice::KFDB entity updated" || echo "::warning::KFDB update failed (non-blocking)"
+            -d @/tmp/kfdb-payload.json \
+            && echo "::notice::KFDB entity updated with tools_available" \
+            || echo "::warning::KFDB update failed (non-blocking)"
 
       - name: Reload MCP gateway
         if: steps.publish.outcome == 'success'

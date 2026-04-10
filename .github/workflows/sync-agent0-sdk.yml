@@ -112,22 +112,51 @@ jobs:
             -f "client_payload[package]=@rickydata/agent0-mcp" \
             -f "client_payload[version]=${{ steps.version.outputs.new_version }}"
 
-      - name: Update KFDB version
+      - name: Export tool definitions
         if: steps.check.outputs.needs_update == 'true'
         run: |
-          curl -s -X POST "${{ vars.KFDB_URL || 'http://34.60.37.158' }}/api/v1/write" \
+          node -e "
+            import('./dist/tools/index.js').then(m => {
+              const toolDefs = m.TOOLS.map(t => ({
+                name: t.name,
+                description: t.description || '',
+                inputSchema: t.inputSchema || {},
+              }));
+              require('fs').writeFileSync('/tmp/tools_available.json', JSON.stringify(toolDefs));
+              console.log('Exported ' + toolDefs.length + ' tool definitions');
+            });
+          "
+
+      - name: Update KFDB version + tools_available
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          node -e "
+            const fs = require('fs');
+            const tools = JSON.parse(fs.readFileSync('/tmp/tools_available.json', 'utf8'));
+            const payload = {
+              operations: [{
+                operation: 'update_node',
+                id: '55abe175-5f8d-436b-98ec-98fb87a655c4',
+                properties: {
+                  version: { String: '${{ steps.version.outputs.new_version }}' },
+                  tools_count: { Integer: tools.length },
+                  tools_available: { String: JSON.stringify(tools) },
+                  install_command: { String: 'npx -y @rickydata/agent0-mcp@${{ steps.version.outputs.new_version }}' },
+                  run_command: { String: 'npx -y @rickydata/agent0-mcp@${{ steps.version.outputs.new_version }}' },
+                  enriched_at: { String: new Date().toISOString() },
+                  enrichment_version: { Integer: 5 },
+                },
+              }],
+            };
+            fs.writeFileSync('/tmp/kfdb-payload.json', JSON.stringify(payload));
+            console.log('KFDB payload: ' + tools.length + ' tools');
+          "
+          curl -sf -X POST "${{ vars.KFDB_URL || 'http://34.60.37.158' }}/api/v1/write" \
             -H "Authorization: Bearer ${{ secrets.KFDB_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"operations\": [{
-                \"operation\": \"update_node\",
-                \"id\": \"1c671e41-42a7-405f-a66f-231e8e1285dc\",
-                \"properties\": {
-                  \"version\": { \"String\": \"${{ steps.version.outputs.new_version }}\" },
-                  \"tools_count\": { \"Integer\": $(node -e "import('./dist/tools/index.js').then(m => console.log(m.TOOLS.length))") }
-                }
-              }]
-            }"
+            -d @/tmp/kfdb-payload.json \
+            && echo "::notice::KFDB updated with tools_available" \
+            || echo "::warning::KFDB update failed"
 
       - name: Reload MCP gateway
         if: steps.check.outputs.needs_update == 'true'
