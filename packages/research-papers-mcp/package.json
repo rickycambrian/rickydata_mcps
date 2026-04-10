@@ -1,5 +1,5 @@
 {
-  "name": "@rickydata/research-papers-mcp",
+  "name": "research-papers-mcp",
   "version": "0.1.0",
   "private": false,
   "description": "MCP server for research paper ingestion, parsing, and structured navigation via KFDB",
