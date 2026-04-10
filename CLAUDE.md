@@ -22,10 +22,11 @@ For the enrichment pipeline to detect a package as an MCP server, it MUST have `
 
 ```
 packages/
-  rickydata-mcp/     # Marketplace + wallet tools
-  geo-research-api/  # Geo research paper API (not an MCP server)
-  <your-server>/     # Your new MCP server
-_template/           # Template for new servers
+  rickydata-mcp/          # Marketplace + wallet tools
+  research-papers-mcp/    # arXiv ingestion + KFDB-backed paper navigation (6 tools)
+  geo-research-api/       # Geo research paper API (not an MCP server)
+  <your-server>/          # Your new MCP server
+_template/                # Template for new servers
 ```
 
 ## Development
@@ -48,3 +49,9 @@ npm run dev
 - **Tool organization**: Group tools by domain in separate files, register them in `tools.ts`
 - **Response capping**: Cap response content to prevent token overflow
 - **Wallet token verification**: Use `wallet-token.ts` pattern for auth when needed
+
+## Skills Reference
+
+- **`create-mcp-server`**: Step-by-step scaffold guide for new MCP servers
+- **`mcp-patterns`**: Reusable patterns (dual transport, tool organization, response capping, Zod validation)
+- **`research-papers-dev`**: Verified build/run/test workflow for `research-papers-mcp` — use when working on that package
