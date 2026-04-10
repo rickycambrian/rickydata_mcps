@@ -59,8 +59,8 @@ export interface CreateNodeOp {
 export interface CreateEdgeOp {
   operation: "create_edge";
   edge_type: string;
-  from_id: string;
-  to_id: string;
+  from: string;
+  to: string;
   properties?: Record<string, unknown>;
 }
 

@@ -104,8 +104,9 @@ async function writePaperToKfdb(artifact: StoredPaperArtifact): Promise<void> {
     ops.push({
       operation: "create_edge",
       edge_type: "HAS_CHUNK",
-      from_id: paperId(artifact.arxivId),
-      to_id: cId,
+      from: paperId(artifact.arxivId),
+      to: cId,
+      properties: {},
     });
 
     // Batch writes in groups of 50 to avoid oversized requests
