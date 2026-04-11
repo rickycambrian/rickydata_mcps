@@ -139,35 +139,45 @@ jobs:
             && echo "::notice::KFDB entity updated with tools_available" \
             || echo "::warning::KFDB update failed (non-blocking)"
 
-      - name: Restart agent0-mcp container (pull new npm version)
+      - name: Sync server in MCP gateway (instant single-entity refresh)
         if: steps.publish.outcome == 'success'
         run: |
           MCP_GW="${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}"
           TOKEN="${{ secrets.OPERATOR_WALLET_TOKEN }}"
           SERVER_ID="55abe175-5f8d-436b-98ec-98fb87a655c4"
 
-          echo "Stopping agent0-mcp container..."
-          curl -sf -X POST "$MCP_GW/api/servers/$SERVER_ID/stop" \
-            -H "Authorization: Bearer $TOKEN" || echo "::warning::Stop failed (may not be running)"
-
-          echo "Waiting 5s for container cleanup..."
-          sleep 5
-
-          echo "Starting agent0-mcp container (will pull v${{ steps.ver.outputs.version }})..."
-          RESPONSE=$(curl -sf -X POST "$MCP_GW/api/servers/$SERVER_ID/start" \
-            -H "Authorization: Bearer $TOKEN" || echo '{"error":"start failed"}')
-          echo "Start response: $RESPONSE"
-
-          if echo "$RESPONSE" | grep -q '"started"'; then
-            echo "::notice::agent0-mcp container restarted with v${{ steps.ver.outputs.version }}"
+          # Single-server sync: fetches just this entity from KFDB and updates gateway in-memory.
+          # Much faster than full reload (which pages through 100K+ entities and times out).
+          echo "Syncing server $SERVER_ID in MCP gateway..."
+          RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/health/reload/$SERVER_ID" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" || echo '{"error":"sync failed"}')
+          echo "Sync response: $RESPONSE"
+          if echo "$RESPONSE" | grep -q '"updated"'; then
+            echo "::notice::MCP gateway synced agent0-mcp v${{ steps.ver.outputs.version }}"
           else
-            echo "::warning::Container restart may have failed: $RESPONSE"
+            echo "::warning::MCP gateway single-server sync failed (will pick up on next 10-min cycle): $RESPONSE"
+          fi
+
+          # Restart the container to pull new npm version
+          echo "Stopping agent0-mcp container..."
+          curl -sf --max-time 15 -X POST "$MCP_GW/api/servers/$SERVER_ID/stop" \
+            -H "Authorization: Bearer $TOKEN" || echo "::warning::Stop failed (may not be running)"
+          sleep 5
+          echo "Starting agent0-mcp container (will pull v${{ steps.ver.outputs.version }})..."
+          START_RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/api/servers/$SERVER_ID/start" \
+            -H "Authorization: Bearer $TOKEN" || echo '{"error":"start failed"}')
+          echo "Start response: $START_RESPONSE"
+          if echo "$START_RESPONSE" | grep -q '"started"'; then
+            echo "::notice::Container restarted with v${{ steps.ver.outputs.version }}"
+          else
+            echo "::warning::Container restart may have failed: $START_RESPONSE"
           fi
 
       - name: Reload agent gateway (refresh MCP tool cache)
         if: steps.publish.outcome == 'success'
         run: |
-          RESPONSE=$(curl -s -X POST "${{ vars.AGENT_GATEWAY_URL || 'https://agents.rickydata.org' }}/health/reload" \
+          RESPONSE=$(curl -s --max-time 30 -X POST "${{ vars.AGENT_GATEWAY_URL || 'https://agents.rickydata.org' }}/health/reload" \
             -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
             -H "Content-Type: application/json")
           echo "Agent gateway reload: $RESPONSE"
