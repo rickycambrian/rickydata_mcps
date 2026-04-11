@@ -51,7 +51,8 @@ function setupMCPHandlers(server: Server): void {
     } catch (error: unknown) {
       const message =
         error instanceof Error ? error.message : String(error);
-      result = { success: false, error: message };
+      const stack = error instanceof Error ? error.stack : undefined;
+      result = { success: false, error: message, ...(stack && { stack: stack.split('\n').slice(0, 5).join('\n') }) };
     }
 
     const content = truncateResponse(result);

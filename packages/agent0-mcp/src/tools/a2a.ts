@@ -160,6 +160,44 @@ function parseChainId(agentId: string): number {
 }
 
 // ============================================================================
+// A2A ENDPOINT RESOLUTION
+// ============================================================================
+
+async function resolveA2aEndpoint(a2aUrl: string): Promise<{ baseUrl: string; a2aVersion: string }> {
+  // Fetch agent card from the A2A endpoint
+  const isCardUrl = /\/(\.well-known\/)?(agent-card|agent)\.json$/i.test(new URL(a2aUrl).pathname);
+  let cardData: Record<string, unknown> | null = null;
+
+  if (isCardUrl) {
+    const res = await fetch(a2aUrl, { signal: AbortSignal.timeout(5000), redirect: 'follow' });
+    if (res.ok) cardData = await res.json() as Record<string, unknown>;
+  } else {
+    const base = a2aUrl.replace(/\/+$/, '');
+    for (const p of ['/.well-known/agent-card.json', '/.well-known/agent.json']) {
+      const res = await fetch(`${base}${p}`, { signal: AbortSignal.timeout(5000), redirect: 'follow' });
+      if (res.ok) { cardData = await res.json() as Record<string, unknown>; break; }
+      if (res.status !== 404) break;
+    }
+  }
+
+  if (!cardData) throw new Error('Could not load agent card');
+
+  // Extract base URL and version from card interfaces
+  const interfaces = cardData.supportedInterfaces as Array<{ url?: string; protocolVersion?: string; protocolBinding?: string }> | undefined;
+  if (Array.isArray(interfaces) && interfaces.length > 0) {
+    const chosen = interfaces.find(i => i.protocolBinding === 'HTTP+JSON') ?? interfaces[0];
+    return {
+      baseUrl: (chosen.url ?? '').replace(/\/+$/, ''),
+      a2aVersion: chosen.protocolVersion ?? '1.0',
+    };
+  }
+
+  // Fallback: use card's url field or derive from A2A URL
+  const url = (cardData.url as string) ?? a2aUrl.replace(/\/(\.well-known\/)?(agent-card|agent)\.json$/i, '') ?? a2aUrl;
+  return { baseUrl: url.replace(/\/+$/, ''), a2aVersion: (cardData.protocolVersion as string) ?? '1.0' };
+}
+
+// ============================================================================
 // HANDLERS
 // ============================================================================
 
@@ -183,50 +221,135 @@ async function handleSendMessage(
     };
   }
 
-  // Create A2A client from summary
-  const a2aClient = sdk.createA2AClient(agentSummary);
+  // Resolve A2A interface from agent card
+  const { baseUrl, a2aVersion } = await resolveA2aEndpoint(agentSummary.a2a);
 
-  // Send message
-  let result = await (a2aClient as any).messageA2A(message, {
-    taskId: (args.taskId as string) ?? undefined,
+  // Build A2A message body
+  const body = {
+    jsonrpc: '2.0' as const,
+    id: `msg-${Date.now()}`,
+    method: 'SendMessage',
+    params: {
+      message: {
+        role: 'ROLE_USER',
+        parts: [{ text: message }],
+        ...(args.taskId ? { taskId: args.taskId } : {}),
+      },
+    },
+  };
+
+  const messageSendUrl = `${baseUrl}/message:send`;
+
+  // Step 1: Send initial request (expect 402 for paid agents)
+  const initialRes = await fetch(messageSendUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'A2A-Version': a2aVersion },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000),
   });
 
-  // Auto-pay x402 if the agent requires payment and payFirst is available
-  if (result && typeof result === 'object' && 'x402Required' in result && result.x402Required) {
-    const x402 = result.x402Payment;
-    if (x402?.payFirst) {
-      try {
-        result = await x402.payFirst();
-      } catch (e) {
-        return {
-          success: false,
-          error: `x402 payment failed: ${(e as Error).message}`,
-          agentId,
-          chain: getChainName(parseChainId(agentId)),
-          x402: { accepts: x402.accepts, price: x402.price, network: x402.network },
-        };
-      }
-    } else {
-      // payFirst not available — return x402 challenge for manual payment
-      return {
-        success: true,
-        agentId,
-        chain: getChainName(parseChainId(agentId)),
-        response: result,
-      };
-    }
+  // If 200, agent doesn't require payment
+  if (initialRes.ok) {
+    const data = await initialRes.json() as Record<string, unknown>;
+    const task = (data as any).task ?? (data as any).result ?? data;
+    return formatTaskResult(agentId, task);
   }
 
+  // If not 402, unexpected error
+  if (initialRes.status !== 402) {
+    const text = await initialRes.text();
+    return { success: false, error: `A2A request failed: HTTP ${initialRes.status}`, detail: text.slice(0, 300) };
+  }
+
+  // Step 2: Parse 402 challenge
+  const challengeBody = await initialRes.json() as Record<string, unknown>;
+  const accepts = (challengeBody as any)?.data?.accepts ?? (challengeBody as any)?.accepts ?? [];
+  if (!accepts.length) {
+    return { success: false, error: 'A2A 402 response missing accepts', detail: JSON.stringify(challengeBody).slice(0, 300) };
+  }
+
+  // Step 3: Sign x402 payment using SDK's wallet
+  const x402Deps = sdk.getX402RequestDeps?.();
+  if (!x402Deps?.buildPayment) {
+    return { success: false, error: 'No x402 payment capability — wallet may not have signing key' };
+  }
+
+  let paymentHeader: string;
+  try {
+    paymentHeader = await x402Deps.buildPayment(accepts[0], { url: messageSendUrl, method: 'POST', x402Version: 2, resource: accepts[0]?.resource });
+  } catch (e) {
+    return { success: false, error: `x402 payment signing failed: ${(e as Error).message}`, agentId };
+  }
+
+  // Step 4: Retry with payment
+  const paidRes = await fetch(messageSendUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'A2A-Version': a2aVersion,
+      'PAYMENT-SIGNATURE': paymentHeader,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120000),
+  });
+
+  if (!paidRes.ok) {
+    const text = await paidRes.text();
+    return { success: false, error: `A2A paid request failed: HTTP ${paidRes.status}`, detail: text.slice(0, 300) };
+  }
+
+  const data = await paidRes.json() as Record<string, unknown>;
+  let task = (data as any).task ?? (data as any).result ?? data;
+
+  // Poll if task is SUBMITTED (agent hasn't finished yet)
+  const taskId = task?.id ?? task?.taskId;
+  if (taskId && isSubmittedState(task)) {
+    task = await pollForCompletion(baseUrl, a2aVersion, taskId, paymentHeader) ?? task;
+  }
+
+  return formatTaskResult(agentId, task);
+}
+
+function isSubmittedState(task: any): boolean {
+  const state = task?.status?.state;
+  return state === 'TASK_STATE_SUBMITTED' || state === 'submitted' || state === 'working';
+}
+
+async function pollForCompletion(baseUrl: string, a2aVersion: string, taskId: string, paymentHeader: string): Promise<any | null> {
+  const taskUrl = `${baseUrl}/tasks/${taskId}`;
+  for (let i = 0; i < 12; i++) {  // Poll up to 60s (12 * 5s)
+    await new Promise(r => setTimeout(r, 5000));
+    try {
+      const res = await fetch(taskUrl, {
+        headers: { 'A2A-Version': a2aVersion, 'PAYMENT-SIGNATURE': paymentHeader },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json() as any;
+      const task = data.task ?? data.result ?? data;
+      if (!isSubmittedState(task)) return task;
+    } catch { /* retry */ }
+  }
+  return null;
+}
+
+function formatTaskResult(agentId: string, task: Record<string, unknown>): unknown {
   const chainId = parseChainId(agentId);
+  const responseText = (task?.artifacts as any[])?.[0]?.parts?.[0]?.text
+    ?? (task?.history as any[])?.filter?.((m: any) => m.role === 'ROLE_AGENT')?.pop()?.parts?.[0]?.text;
   return {
     success: true,
     agentId,
     chain: getChainName(chainId),
-    taskId: result?.taskId ?? result?.id,
-    status: result?.status,
-    response: result?.response ?? result?.text ?? result,
+    taskId: task?.id ?? task?.taskId,
+    status: task?.status,
+    response: responseText ?? task,
   };
 }
+
+// ============================================================================
+// TASK RETRIEVAL (Direct HTTP — no SDK dependency)
+// ============================================================================
 
 async function handleListTasks(
   args: Record<string, unknown>,
@@ -236,21 +359,22 @@ async function handleListTasks(
 
   const agentId = args.agentId as string;
   const agentSummary = await sdk.getAgent(agentId);
-  if (!agentSummary) {
-    return { error: `Agent ${agentId} not found` };
-  }
-  if (!agentSummary.a2a) {
-    return { error: `Agent ${agentId} does not have an A2A endpoint` };
+  if (!agentSummary?.a2a) {
+    return { error: `Agent ${agentId} not found or has no A2A endpoint` };
   }
 
-  const a2aClient = sdk.createA2AClient(agentSummary);
-  const tasks = await (a2aClient as any).listTasks();
+  const { baseUrl, a2aVersion } = await resolveA2aEndpoint(agentSummary.a2a);
+  const res = await fetch(`${baseUrl}/tasks`, {
+    headers: { 'A2A-Version': a2aVersion },
+    signal: AbortSignal.timeout(15000),
+  });
 
-  return {
-    agentId,
-    count: Array.isArray(tasks) ? tasks.length : 0,
-    tasks: tasks ?? [],
-  };
+  if (!res.ok) {
+    return { agentId, count: 0, tasks: [], note: `HTTP ${res.status}` };
+  }
+  const data = await res.json() as any;
+  const tasks = data.result?.tasks ?? data.tasks ?? [];
+  return { agentId, count: tasks.length, tasks };
 }
 
 async function handleGetTask(
@@ -261,51 +385,59 @@ async function handleGetTask(
 
   const agentId = args.agentId as string;
   const taskId = args.taskId as string;
-
   const agentSummary = await sdk.getAgent(agentId);
-  if (!agentSummary) {
-    return { error: `Agent ${agentId} not found` };
+  if (!agentSummary?.a2a) {
+    return { error: `Agent ${agentId} not found or has no A2A endpoint` };
   }
 
-  const a2aClient = sdk.createA2AClient(agentSummary);
-  const task = await (a2aClient as any).loadTask(taskId);
+  const { baseUrl, a2aVersion } = await resolveA2aEndpoint(agentSummary.a2a);
+  const res = await fetch(`${baseUrl}/tasks/${taskId}`, {
+    headers: { 'A2A-Version': a2aVersion },
+    signal: AbortSignal.timeout(15000),
+  });
 
-  return {
-    agentId,
-    taskId,
-    task: task ?? { error: "Task not found" },
-  };
+  if (!res.ok) {
+    return { agentId, taskId, error: `HTTP ${res.status}` };
+  }
+  const data = await res.json() as any;
+  const task = data.task ?? data.result ?? data;
+  return formatTaskResult(agentId, task);
 }
 
 async function handleQueryTask(
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  // Query task is the same as get task with optional historyLength param
   const { sdk, error } = await requireAuth();
   if (error || !sdk) return { error };
 
   const agentId = args.agentId as string;
   const taskId = args.taskId as string;
   const historyLength = args.historyLength as number | undefined;
-
   const agentSummary = await sdk.getAgent(agentId);
-  if (!agentSummary) {
-    return { error: `Agent ${agentId} not found` };
-  }
-  if (!agentSummary.a2a) {
-    return { error: `Agent ${agentId} does not have an A2A endpoint` };
+  if (!agentSummary?.a2a) {
+    return { error: `Agent ${agentId} not found or has no A2A endpoint` };
   }
 
-  const a2aClient = sdk.createA2AClient(agentSummary);
-  const task = await (a2aClient as any).queryTask(taskId, {
-    historyLength: historyLength ?? undefined,
+  const { baseUrl, a2aVersion } = await resolveA2aEndpoint(agentSummary.a2a);
+  const qs = historyLength !== undefined ? `?historyLength=${historyLength}` : '';
+  const res = await fetch(`${baseUrl}/tasks/${taskId}${qs}`, {
+    headers: { 'A2A-Version': a2aVersion },
+    signal: AbortSignal.timeout(15000),
   });
 
+  if (!res.ok) {
+    return { agentId, taskId, error: `HTTP ${res.status}` };
+  }
+  const data = await res.json() as any;
+  const task = data.task ?? data.result ?? data;
   return {
     agentId,
     taskId,
     status: task?.status,
-    messages: task?.messages ?? [],
+    messages: task?.history ?? task?.messages ?? [],
     artifacts: task?.artifacts ?? [],
+    response: (task?.artifacts as any[])?.[0]?.parts?.[0]?.text,
   };
 }
 
@@ -327,29 +459,67 @@ async function handleTaskMessage(
     return { error: `Agent ${agentId} does not have an A2A endpoint` };
   }
 
-  const a2aClient = sdk.createA2AClient(agentSummary);
-  let result = await (a2aClient as any).messageA2A(message, { taskId });
+  // Direct HTTP approach (same as handleSendMessage)
+  const { baseUrl, a2aVersion } = await resolveA2aEndpoint(agentSummary.a2a);
 
-  // Auto-pay x402 if required
-  if (result && typeof result === 'object' && 'x402Required' in result && result.x402Required) {
-    if (result.x402Payment?.payFirst) {
-      try {
-        result = await result.x402Payment.payFirst();
-      } catch (e) {
-        return { success: false, error: `x402 payment failed: ${(e as Error).message}`, agentId, taskId };
-      }
-    }
+  const body = {
+    jsonrpc: '2.0' as const,
+    id: `msg-${Date.now()}`,
+    method: 'SendMessage',
+    params: {
+      message: { role: 'ROLE_USER', parts: [{ text: message }], taskId },
+    },
+  };
+  const messageSendUrl = `${baseUrl}/message:send`;
+
+  // Try without payment first
+  const initialRes = await fetch(messageSendUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'A2A-Version': a2aVersion },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (initialRes.ok) {
+    const data = await initialRes.json() as Record<string, unknown>;
+    const task = (data as any).task ?? (data as any).result ?? data;
+    return formatTaskResult(agentId, task);
   }
 
-  const chainId = parseChainId(agentId);
-  return {
-    success: true,
-    agentId,
-    chain: getChainName(chainId),
-    taskId,
-    status: result?.status,
-    response: result?.response ?? result?.text ?? result,
-  };
+  if (initialRes.status !== 402) {
+    return { success: false, error: `A2A request failed: HTTP ${initialRes.status}` };
+  }
+
+  // Sign and retry with x402 payment
+  const challengeBody = await initialRes.json() as Record<string, unknown>;
+  const accepts = (challengeBody as any)?.data?.accepts ?? (challengeBody as any)?.accepts ?? [];
+  const x402Deps = sdk.getX402RequestDeps?.();
+  if (!x402Deps?.buildPayment || !accepts.length) {
+    return { success: false, error: 'Cannot pay for A2A message — no payment capability or empty accepts' };
+  }
+
+  let paymentHeader: string;
+  try {
+    paymentHeader = await x402Deps.buildPayment(accepts[0], { url: messageSendUrl, method: 'POST', x402Version: 2 });
+  } catch (e) {
+    return { success: false, error: `x402 payment signing failed: ${(e as Error).message}`, agentId };
+  }
+
+  const paidRes = await fetch(messageSendUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'A2A-Version': a2aVersion, 'PAYMENT-SIGNATURE': paymentHeader },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120000),
+  });
+
+  if (!paidRes.ok) {
+    const text = await paidRes.text();
+    return { success: false, error: `A2A paid request failed: HTTP ${paidRes.status}`, detail: text.slice(0, 300) };
+  }
+
+  const data = await paidRes.json() as Record<string, unknown>;
+  const task = (data as any).task ?? (data as any).result ?? data;
+  return formatTaskResult(agentId, task);
 }
 
 async function handleCancelTask(
