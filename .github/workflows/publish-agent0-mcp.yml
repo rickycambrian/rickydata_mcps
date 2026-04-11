@@ -1,6 +1,9 @@
 name: Publish agent0-mcp
 
 on:
+  push:
+    paths: ['packages/agent0-mcp/package.json']
+    branches: [main]
   workflow_dispatch:
     inputs:
       skip_version_bump:
@@ -136,20 +139,32 @@ jobs:
             && echo "::notice::KFDB entity updated with tools_available" \
             || echo "::warning::KFDB update failed (non-blocking)"
 
-      - name: Reload MCP gateway
+      - name: Restart agent0-mcp container (pull new npm version)
         if: steps.publish.outcome == 'success'
         run: |
-          RESPONSE=$(curl -s -X POST "${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}/health/reload" \
-            -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
-            -H "Content-Type: application/json")
-          echo "Reload response: $RESPONSE"
-          if echo "$RESPONSE" | grep -q '"status":"reloaded"'; then
-            echo "::notice::MCP gateway reloaded successfully"
+          MCP_GW="${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}"
+          TOKEN="${{ secrets.OPERATOR_WALLET_TOKEN }}"
+          SERVER_ID="55abe175-5f8d-436b-98ec-98fb87a655c4"
+
+          echo "Stopping agent0-mcp container..."
+          curl -sf -X POST "$MCP_GW/api/servers/$SERVER_ID/stop" \
+            -H "Authorization: Bearer $TOKEN" || echo "::warning::Stop failed (may not be running)"
+
+          echo "Waiting 5s for container cleanup..."
+          sleep 5
+
+          echo "Starting agent0-mcp container (will pull v${{ steps.ver.outputs.version }})..."
+          RESPONSE=$(curl -sf -X POST "$MCP_GW/api/servers/$SERVER_ID/start" \
+            -H "Authorization: Bearer $TOKEN" || echo '{"error":"start failed"}')
+          echo "Start response: $RESPONSE"
+
+          if echo "$RESPONSE" | grep -q '"started"'; then
+            echo "::notice::agent0-mcp container restarted with v${{ steps.ver.outputs.version }}"
           else
-            echo "::warning::MCP gateway reload may have failed: $RESPONSE"
+            echo "::warning::Container restart may have failed: $RESPONSE"
           fi
 
-      - name: Reload agent gateway
+      - name: Reload agent gateway (refresh MCP tool cache)
         if: steps.publish.outcome == 'success'
         run: |
           RESPONSE=$(curl -s -X POST "${{ vars.AGENT_GATEWAY_URL || 'https://agents.rickydata.org' }}/health/reload" \
