@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -3036,7 +3037,7 @@ app.delete("/mcp", authMiddleware, async (req, res) => {
 });
 
 // Start
-const isStdio = process.argv.includes("--stdio");
+const isStdio = process.argv.includes("--stdio") || !process.stdin.isTTY;
 
 if (isStdio) {
   console.log = console.error;

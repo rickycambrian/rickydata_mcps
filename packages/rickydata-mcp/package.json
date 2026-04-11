@@ -1,8 +1,11 @@
 {
   "name": "rickydata-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "rickydata MCP server",
   "main": "dist/index.js",
+  "bin": {
+    "rickydata-mcp": "./dist/index.js"
+  },
   "type": "module",
   "scripts": {
     "build": "tsc",
