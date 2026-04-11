@@ -55,3 +55,4 @@ npm run dev
 - **`create-mcp-server`**: Step-by-step scaffold guide for new MCP servers
 - **`mcp-patterns`**: Reusable patterns (dual transport, tool organization, response capping, Zod validation)
 - **`research-papers-dev`**: Verified build/run/test workflow for `research-papers-mcp` — use when working on that package
+- **`agent-update-workflow`**: Verified process for updating agent definitions in mcp_deployments_registry to use new/updated MCP servers
