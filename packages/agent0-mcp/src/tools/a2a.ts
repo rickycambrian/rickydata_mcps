@@ -1,10 +1,63 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { ethers } from "ethers";
 import {
   getAuthenticatedSDK,
   getReadOnlySDK,
   hasAuthentication,
+  resolvePrivateKey,
 } from "../auth/sdk-client.js";
 import { getChainName } from "../utils/chains.js";
+
+// ============================================================================
+// WALLET TOKEN GENERATION (mcpwt_)
+// ============================================================================
+//
+// Generates a self-signed, self-verifying wallet token from the locally-held
+// private key. Used for Bearer auth on task-read endpoints so the derived
+// agent wallet can read its own tasks without paying x402 each time.
+// Format matches mcp-agent-gateway/src/auth/wallet-token.ts: same canonical
+// message, same base64url(JSON) encoding, same signature scheme. Verified
+// server-side via ecrecover — no server state, no roundtrip.
+
+const WALLET_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const WALLET_TOKEN_REFRESH_MS = 12 * 60 * 60 * 1000; // refresh at 12h
+let _cachedWalletToken: { token: string; expiresAtMs: number; pk: string } | null = null;
+
+async function getDerivedWalletToken(): Promise<string | null> {
+  const pk = resolvePrivateKey();
+  if (!pk) return null;
+
+  // Reuse cached token if still fresh and same wallet
+  const now = Date.now();
+  if (
+    _cachedWalletToken &&
+    _cachedWalletToken.pk === pk &&
+    _cachedWalletToken.expiresAtMs - now > WALLET_TOKEN_REFRESH_MS
+  ) {
+    return _cachedWalletToken.token;
+  }
+
+  try {
+    const wallet = new ethers.Wallet(pk.startsWith('0x') ? pk : '0x' + pk);
+    const expiresAtMs = now + WALLET_TOKEN_TTL_MS;
+    const expiresAt = new Date(expiresAtMs).toISOString();
+    const checksummed = ethers.getAddress(wallet.address);
+    const msg = `MCP Platform Auth\nWallet: ${checksummed}\nExpires: ${expiresAt}`;
+    const sig = await wallet.signMessage(msg);
+    const payload = {
+      v: 1,
+      wallet: checksummed,
+      exp: Math.floor(expiresAtMs / 1000),
+      msg,
+      sig,
+    };
+    const token = 'mcpwt_' + Buffer.from(JSON.stringify(payload)).toString('base64url');
+    _cachedWalletToken = { token, expiresAtMs, pk };
+    return token;
+  } catch {
+    return null;
+  }
+}
 
 export const a2aTools: Tool[] = [
   {
@@ -301,10 +354,13 @@ async function handleSendMessage(
   const data = await paidRes.json() as Record<string, unknown>;
   let task = (data as any).task ?? (data as any).result ?? data;
 
-  // Poll if task is SUBMITTED (agent hasn't finished yet)
+  // Poll if task is SUBMITTED (agent hasn't finished yet).
+  // Use a derived-wallet mcpwt_ Bearer token for the poll — the x402 payment
+  // nonce is one-shot and can't be reused for task reads.
   const taskId = task?.id ?? task?.taskId;
   if (taskId && isSubmittedState(task)) {
-    task = await pollForCompletion(baseUrl, a2aVersion, taskId, paymentHeader) ?? task;
+    const bearer = await getDerivedWalletToken();
+    task = await pollForCompletion(baseUrl, a2aVersion, taskId, bearer) ?? task;
   }
 
   return formatTaskResult(agentId, task);
@@ -315,13 +371,15 @@ function isSubmittedState(task: any): boolean {
   return state === 'TASK_STATE_SUBMITTED' || state === 'submitted' || state === 'working';
 }
 
-async function pollForCompletion(baseUrl: string, a2aVersion: string, taskId: string, paymentHeader: string): Promise<any | null> {
+async function pollForCompletion(baseUrl: string, a2aVersion: string, taskId: string, bearerToken: string | null): Promise<any | null> {
   const taskUrl = `${baseUrl}/tasks/${taskId}`;
+  const headers: Record<string, string> = { 'A2A-Version': a2aVersion };
+  if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
   for (let i = 0; i < 12; i++) {  // Poll up to 60s (12 * 5s)
     await new Promise(r => setTimeout(r, 5000));
     try {
       const res = await fetch(taskUrl, {
-        headers: { 'A2A-Version': a2aVersion, 'PAYMENT-SIGNATURE': paymentHeader },
+        headers,
         signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) continue;
@@ -351,6 +409,19 @@ function formatTaskResult(agentId: string, task: Record<string, unknown>): unkno
 // TASK RETRIEVAL (Direct HTTP — no SDK dependency)
 // ============================================================================
 
+/**
+ * Build Bearer auth headers using the derived wallet mcpwt_ token.
+ * Allows the task-owner wallet to read its own tasks without paying x402
+ * each time. The target A2A gateway's optionalAuth will identify the wallet
+ * via ecrecover and match it against the task's owner.
+ */
+async function buildAuthHeaders(a2aVersion: string): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'A2A-Version': a2aVersion };
+  const token = await getDerivedWalletToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
+
 async function handleListTasks(
   args: Record<string, unknown>,
 ): Promise<unknown> {
@@ -365,7 +436,7 @@ async function handleListTasks(
 
   const { baseUrl, a2aVersion } = await resolveA2aEndpoint(agentSummary.a2a);
   const res = await fetch(`${baseUrl}/tasks`, {
-    headers: { 'A2A-Version': a2aVersion },
+    headers: await buildAuthHeaders(a2aVersion),
     signal: AbortSignal.timeout(15000),
   });
 
@@ -392,7 +463,7 @@ async function handleGetTask(
 
   const { baseUrl, a2aVersion } = await resolveA2aEndpoint(agentSummary.a2a);
   const res = await fetch(`${baseUrl}/tasks/${taskId}`, {
-    headers: { 'A2A-Version': a2aVersion },
+    headers: await buildAuthHeaders(a2aVersion),
     signal: AbortSignal.timeout(15000),
   });
 
@@ -422,7 +493,7 @@ async function handleQueryTask(
   const { baseUrl, a2aVersion } = await resolveA2aEndpoint(agentSummary.a2a);
   const qs = historyLength !== undefined ? `?historyLength=${historyLength}` : '';
   const res = await fetch(`${baseUrl}/tasks/${taskId}${qs}`, {
-    headers: { 'A2A-Version': a2aVersion },
+    headers: await buildAuthHeaders(a2aVersion),
     signal: AbortSignal.timeout(15000),
   });
 
@@ -518,7 +589,15 @@ async function handleTaskMessage(
   }
 
   const data = await paidRes.json() as Record<string, unknown>;
-  const task = (data as any).task ?? (data as any).result ?? data;
+  let task = (data as any).task ?? (data as any).result ?? data;
+
+  // Poll for completion if SUBMITTED — same pattern as handleSendMessage.
+  const newTaskId = task?.id ?? task?.taskId;
+  if (newTaskId && isSubmittedState(task)) {
+    const bearer = await getDerivedWalletToken();
+    task = await pollForCompletion(baseUrl, a2aVersion, newTaskId, bearer) ?? task;
+  }
+
   return formatTaskResult(agentId, task);
 }
 

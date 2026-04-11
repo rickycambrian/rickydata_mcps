@@ -205,11 +205,36 @@ jobs:
         if: steps.publish.outcome == 'success' && inputs.skip_version_bump != 'true'
         working-directory: .
         run: |
+          set -e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Ensure we're on the right branch and have the latest refs
+          git fetch origin main
+          git checkout main
+          # Re-apply the version bump on top of latest main (the previous runs may
+          # have lost the bump if HEAD advanced during publish)
+          node -e "
+            const fs = require('fs');
+            const p = require('./packages/agent0-mcp/package.json');
+            p.version = '${{ steps.ver.outputs.version }}';
+            fs.writeFileSync('./packages/agent0-mcp/package.json', JSON.stringify(p, null, 2) + '\n');
+          "
           git add packages/agent0-mcp/package.json packages/agent0-mcp/package-lock.json 2>/dev/null || true
-          git commit -m "chore(agent0-mcp): publish v${{ steps.ver.outputs.version }}" || true
-          git push
+          # Only commit if there are staged changes (avoids empty-commit failures)
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(agent0-mcp): publish v${{ steps.ver.outputs.version }}"
+            # Retry push up to 3 times (race with concurrent pushes)
+            for i in 1 2 3; do
+              if git push; then
+                echo "::notice::Version bump v${{ steps.ver.outputs.version }} committed"
+                break
+              fi
+              echo "Push attempt $i failed, rebasing and retrying..."
+              git pull --rebase origin main
+            done
+          else
+            echo "::notice::No version changes to commit (already at v${{ steps.ver.outputs.version }})"
+          fi
 
       - name: Create summary
         if: always()
