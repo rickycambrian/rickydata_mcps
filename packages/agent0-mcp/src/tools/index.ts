@@ -6,6 +6,7 @@ import { paymentsTools, handlePaymentsTool } from "./payments.js";
 import { a2aTools, handleA2ATool } from "./a2a.js";
 import { ownershipTools, handleOwnershipTool } from "./ownership.js";
 import { kfdbTools, handleKfdbTool } from "./kfdb.js";
+import { onchainTools, handleOnchainTool } from "./onchain.js";
 
 // Aggregate all tool definitions
 export const TOOLS: Tool[] = [
@@ -16,6 +17,7 @@ export const TOOLS: Tool[] = [
   ...a2aTools,
   ...ownershipTools,
   ...kfdbTools,
+  ...onchainTools,
 ];
 
 // Tool name -> handler routing map
@@ -41,6 +43,9 @@ for (const tool of ownershipTools) {
 }
 for (const tool of kfdbTools) {
   TOOL_HANDLERS[tool.name] = (args) => handleKfdbTool(tool.name, args);
+}
+for (const tool of onchainTools) {
+  TOOL_HANDLERS[tool.name] = (args) => handleOnchainTool(tool.name, args);
 }
 
 export async function handleToolCall(

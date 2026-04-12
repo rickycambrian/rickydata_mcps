@@ -197,16 +197,30 @@ export function getAuthStatus(): {
   chainId: number;
   source: "env:ERC8004_PRIVATE_KEY" | "env:ERC8004_DERIVED_KEY" | "derived" | "injected" | "none";
   isReadOnly: boolean;
+  address?: string;
 } {
   let source: "env:ERC8004_PRIVATE_KEY" | "env:ERC8004_DERIVED_KEY" | "derived" | "injected" | "none" = "none";
   if (process.env.ERC8004_PRIVATE_KEY) source = "env:ERC8004_PRIVATE_KEY";
   else if (process.env.ERC8004_DERIVED_KEY) source = "env:ERC8004_DERIVED_KEY";
   else if (_currentPrivateKey && _keySource) source = _keySource;
 
+  // Derive public address from private key (if available)
+  let address: string | undefined;
+  const pk = resolvePrivateKey();
+  if (pk) {
+    try {
+      const { ethers } = require('ethers') as typeof import('ethers');
+      address = new ethers.Wallet(pk).address;
+    } catch {
+      // ethers not available or key invalid — skip
+    }
+  }
+
   return {
     hasKey: source !== "none",
     chainId: _currentChainId,
     source,
     isReadOnly: source === "none",
+    ...(address ? { address } : {}),
   };
 }
