@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ARTIFACT_DIR } from "./config.js";
 import {
+  kfdbFetch,
   kfdbWrite,
   kfdbSemanticSearch,
   storeChunkEmbedding,
@@ -152,6 +153,13 @@ export async function savePaper(artifact: StoredPaperArtifact): Promise<void> {
   } catch (err) {
     // KFDB may not be configured — local cache is the source of truth
     console.error("KFDB write failed (non-fatal):", err);
+  }
+
+  // Trigger paper enrichment (non-fatal)
+  try {
+    await kfdbFetch("/api/v1/graph/enrich/papers", { method: "POST" });
+  } catch (err) {
+    console.error("Paper enrichment trigger failed (non-fatal):", err);
   }
 }
 
