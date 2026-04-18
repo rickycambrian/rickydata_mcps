@@ -1,0 +1,199 @@
+name: Publish siyuan-mcp
+
+on:
+  push:
+    tags:
+      - 'siyuan-mcp-v*'
+
+concurrency:
+  group: siyuan-mcp-publish-${{ github.ref }}
+  # Don't cancel a publish mid-flight — we'd leave npm + KFDB in inconsistent states.
+  cancel-in-progress: false
+
+env:
+  # Entity lives in KFDB as an MCPServer node. For the first publish, leave
+  # SIYUAN_MCP_SERVER_ID unset (repo Actions variable) — the workflow will
+  # create_node. After the first run, set the var to the returned id so
+  # subsequent publishes update in place.
+  PACKAGE_NAME: '@rickydata/siyuan-mcp'
+  SERVER_NAME: 'siyuan-mcp'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # required for npm --provenance
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install workspace dependencies
+        # The checked-in package-lock.json is authored on macOS and doesn't
+        # pin @rollup/rollup-linux-x64-gnu (npm/cli#4828). Regenerate on
+        # ubuntu so vitest can run rollup natively.
+        run: |
+          rm -f package-lock.json
+          npm install --no-audit --no-fund
+        working-directory: .
+
+      - name: Build
+        run: npm run build
+        working-directory: packages/siyuan-mcp
+
+      - name: Test
+        run: npm test
+        working-directory: packages/siyuan-mcp
+
+      - name: Derive version from tag
+        id: ver
+        run: |
+          TAG="${GITHUB_REF##*/}"          # siyuan-mcp-v0.1.0
+          VERSION="${TAG#siyuan-mcp-v}"    # 0.1.0
+          if [ -z "$VERSION" ] || [ "$VERSION" = "$TAG" ]; then
+            echo "::error::Tag '$TAG' does not match siyuan-mcp-v<version> pattern"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "::notice::Publishing $PACKAGE_NAME version $VERSION"
+
+      - name: Align package.json version to tag
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            p.version = '${{ steps.ver.outputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+            console.log('package.json aligned to version ' + p.version);
+          "
+        working-directory: packages/siyuan-mcp
+
+      - name: Emit tool definitions
+        id: tools
+        run: |
+          npm run emit-tools
+          TOOL_COUNT=$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/tools_available.json','utf8')).length)")
+          echo "count=$TOOL_COUNT" >> "$GITHUB_OUTPUT"
+          echo "::notice::Emitted $TOOL_COUNT tools"
+          if [ "$TOOL_COUNT" -lt 12 ]; then
+            echo "::error::Expected at least 12 tools, got $TOOL_COUNT"
+            exit 1
+          fi
+        working-directory: packages/siyuan-mcp
+
+      - name: Publish to npm (with provenance)
+        id: publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
+        run: npm publish --access public --provenance
+        working-directory: packages/siyuan-mcp
+
+      - name: Build KFDB MCPServer payload
+        id: payload
+        if: steps.publish.outcome == 'success'
+        run: |
+          node -e "
+            const fs = require('fs');
+            const tools = JSON.parse(fs.readFileSync('/tmp/tools_available.json', 'utf8'));
+            const existingId = process.env.SIYUAN_MCP_SERVER_ID || '';
+            const props = {
+              name: { String: process.env.SERVER_NAME },
+              package_identifier: { String: process.env.PACKAGE_NAME },
+              version: { String: process.env.VERSION },
+              tools_count: { Integer: tools.length },
+              tools_available: { String: JSON.stringify(tools) },
+              install_command: { String: 'npx -y ' + process.env.PACKAGE_NAME + '@' + process.env.VERSION },
+              run_command: { String: 'npx -y ' + process.env.PACKAGE_NAME + '@' + process.env.VERSION },
+              enriched_at: { String: new Date().toISOString() },
+              enrichment_version: { Integer: 5 },
+              gateway_compatible: { Boolean: true },
+              registry_type: { String: 'npm' },
+              deployment_type: { String: 'local_tool' },
+              gateway_safe: { Boolean: true },
+            };
+            const op = existingId
+              ? { operation: 'update_node', id: existingId, properties: props }
+              : { operation: 'create_node', label: 'MCPServer', properties: props };
+            fs.writeFileSync('/tmp/kfdb-payload.json', JSON.stringify({ operations: [op] }));
+            console.log((existingId ? 'update_node id=' + existingId : 'create_node') + ' with ' + tools.length + ' tools');
+          "
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          SIYUAN_MCP_SERVER_ID: ${{ vars.SIYUAN_MCP_SERVER_ID }}
+
+      - name: POST MCPServer entity to KFDB
+        id: kfdb
+        if: steps.publish.outcome == 'success'
+        env:
+          KFDB_URL: ${{ vars.KFDB_URL || 'http://34.60.37.158' }}
+          KFDB_API_KEY: ${{ secrets.KFDB_API_KEY }}
+        run: |
+          RESPONSE=$(curl -fsSL -X POST "$KFDB_URL/api/v1/write" \
+            -H "Authorization: Bearer $KFDB_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/kfdb-payload.json)
+          echo "KFDB response: $RESPONSE"
+          # Capture the node id for the summary (same whether create or update).
+          NODE_ID=$(echo "$RESPONSE" | node -e "
+            let s=''; process.stdin.on('data',c=>s+=c); process.stdin.on('end',()=>{
+              try { const j=JSON.parse(s);
+                const id = j.results?.[0]?.id || j.operations?.[0]?.id || j.id || '';
+                console.log(id);
+              } catch(e) { console.log(''); }
+            });")
+          echo "node_id=$NODE_ID" >> "$GITHUB_OUTPUT"
+          echo "::notice::KFDB entity id=$NODE_ID with ${{ steps.tools.outputs.count }} tools"
+
+      - name: Reload MCP gateway (best-effort)
+        if: steps.publish.outcome == 'success'
+        env:
+          MCP_GW: ${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}
+          TOKEN: ${{ secrets.OPERATOR_WALLET_TOKEN }}
+        run: |
+          RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/health/reload" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" || echo '{"error":"reload failed"}')
+          echo "Gateway reload: $RESPONSE"
+          if echo "$RESPONSE" | grep -q '"reloaded"'; then
+            echo "::notice::MCP gateway reloaded"
+          else
+            echo "::warning::MCP gateway reload failed — 10-min auto-sync will catch up"
+          fi
+
+      - name: Verify siyuan-mcp is registered with 12 tools
+        if: steps.publish.outcome == 'success'
+        env:
+          MCP_GW: ${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}
+        run: |
+          # The reload above may not have propagated yet — retry for up to 60s.
+          for attempt in 1 2 3 4 5 6; do
+            TOOL_LEN=$(curl -fsSL "$MCP_GW/api/servers" \
+              | jq --arg name "$SERVER_NAME" '.servers[]? | select(.name == $name) | .tools | length' \
+              | head -n 1)
+            if [ -n "$TOOL_LEN" ] && [ "$TOOL_LEN" = "${{ steps.tools.outputs.count }}" ]; then
+              echo "::notice::Verified: siyuan-mcp has $TOOL_LEN tools in the gateway"
+              exit 0
+            fi
+            echo "Attempt $attempt: got tool_len='$TOOL_LEN', expected ${{ steps.tools.outputs.count }} — retrying in 10s"
+            sleep 10
+          done
+          echo "::warning::Could not verify siyuan-mcp in gateway within 60s (auto-sync on 10-min cycle will catch up)"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo "## siyuan-mcp Publish Summary"
+            echo ""
+            echo "- **Package**: \`$PACKAGE_NAME\`"
+            echo "- **Version**: \`${{ steps.ver.outputs.version }}\`"
+            echo "- **Tools**: ${{ steps.tools.outputs.count }}"
+            echo "- **npm publish**: ${{ steps.publish.outcome }}"
+            echo "- **KFDB node id**: \`${{ steps.kfdb.outputs.node_id }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
