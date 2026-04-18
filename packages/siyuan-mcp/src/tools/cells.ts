@@ -20,7 +20,16 @@ export interface CellToolOptions {
 export const CELL_LANGUAGES = ["python", "r", "api", "mcp", "ai"] as const;
 export type CellLanguage = (typeof CELL_LANGUAGES)[number];
 
-function describeOutcome(o: CellOutcome): Record<string, unknown> {
+/**
+ * Shape a CellOutcome for MCP output. `mode: "capped"` truncates each display
+ * payload to 2KB so a 1-MB inline PNG doesn't blow the caller's response
+ * budget; `mode: "raw"` returns the full base64 blob for callers that
+ * explicitly asked for it (e.g. `siyuan_read_cell_output`).
+ */
+function describeOutcome(
+  o: CellOutcome,
+  mode: "capped" | "raw" = "capped",
+): Record<string, unknown> {
   if (o.ok) {
     return {
       ok: true,
@@ -31,10 +40,10 @@ function describeOutcome(o: CellOutcome): Record<string, unknown> {
       stderr: o.stderr,
       display: o.display.map((d) => ({
         mime_type: d.mime_type,
-        // Always include mime type, but cap the preview of data to 2KB so a
-        // large inline PNG doesn't blow the response budget. Callers who want
-        // the full blob should use `siyuan_read_cell_output`.
-        data: d.data.length > 2048 ? d.data.slice(0, 2048) + "... [truncated]" : d.data,
+        data:
+          mode === "raw" || d.data.length <= 2048
+            ? d.data
+            : d.data.slice(0, 2048) + "... [truncated]",
         dataSizeBytes: d.data.length,
       })),
     };
@@ -125,16 +134,31 @@ export function registerCellTools(
 
   server.tool(
     "siyuan_read_cell_output",
-    "Fetch the latest cached snapshot for an RDM cell via the HTTP proxy. Returns the full display payload (no 2KB cap). Use after siyuan_run_rdm_cell when you need the raw outputs (e.g. base64-encoded PNGs).",
+    "Re-execute an existing RDM cell and return its FULL display payload (no 2KB cap). Use this after `siyuan_run_rdm_cell` when you need raw outputs — e.g. the complete base64 blob of a matplotlib PNG. Note: the RDM sidecar does not expose a cached-snapshot HTTP endpoint, so this tool opens a WS session, runs the cell, and waits for the terminal CellResult/CellError. For deterministic cells the output is identical to the previous run.",
     {
       doc_id: z.string().describe("Document ID hosting the notebook."),
       cell_id: z.string().describe("Target cell ID."),
+      timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Max time to wait for the re-run to complete. Defaults to 120000 ms."),
     },
-    async ({ doc_id, cell_id }) => {
-      const data = await client.get<unknown>(
-        `/api/rdm/http/api/notebooks/${encodeURIComponent(doc_id)}/cells/${encodeURIComponent(cell_id)}/output`,
-      );
-      return textResult({ cellId: cell_id, docId: doc_id, output: data });
+    async ({ doc_id, cell_id, timeout_ms }) => {
+      const ws = await openWsForDoc(doc_id);
+      try {
+        ws.runCell(cell_id);
+        const outcome = await ws.awaitResult(cell_id, timeout_ms ?? runTimeoutMs);
+        // "raw" mode: emit the full display.data base64 without truncation so
+        // callers can reconstruct large binary outputs.
+        return textResult({
+          docId: doc_id,
+          ...describeOutcome(outcome, "raw"),
+        });
+      } finally {
+        ws.close();
+      }
     },
   );
 }

@@ -104,6 +104,42 @@ describe("SiyuanClient", () => {
     expect(url).toBe(`${BASE}/api/foo?kfdb_token=k`);
   });
 
+  it("honors SIYUAN_URL from opts.env when baseUrl is not explicitly set", () => {
+    const client = new SiyuanClient({
+      env: { SIYUAN_URL: "https://staging.siyuan.test" } as NodeJS.ProcessEnv,
+      apiKey: "k",
+    });
+    expect(client.getBaseUrl()).toBe("https://staging.siyuan.test");
+  });
+
+  it("falls back to process.env.SIYUAN_URL when no opts are given (M1-DV-1 Bug 2 guard)", () => {
+    const prev = process.env.SIYUAN_URL;
+    process.env.SIYUAN_URL = "https://env-process.siyuan.test";
+    try {
+      const client = new SiyuanClient({ apiKey: "k" });
+      expect(client.getBaseUrl()).toBe("https://env-process.siyuan.test");
+    } finally {
+      if (prev === undefined) delete process.env.SIYUAN_URL;
+      else process.env.SIYUAN_URL = prev;
+    }
+  });
+
+  it("explicit baseUrl beats both opts.env and process.env", () => {
+    const prev = process.env.SIYUAN_URL;
+    process.env.SIYUAN_URL = "https://loser.siyuan.test";
+    try {
+      const client = new SiyuanClient({
+        baseUrl: "https://winner.siyuan.test",
+        env: { SIYUAN_URL: "https://also-loser.siyuan.test" } as NodeJS.ProcessEnv,
+        apiKey: "k",
+      });
+      expect(client.getBaseUrl()).toBe("https://winner.siyuan.test");
+    } finally {
+      if (prev === undefined) delete process.env.SIYUAN_URL;
+      else process.env.SIYUAN_URL = prev;
+    }
+  });
+
   it("buildUrl adds missing leading slash to the path", async () => {
     const client = newClient();
     const url = await client.buildUrl("api/foo");

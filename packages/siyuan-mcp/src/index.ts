@@ -15,7 +15,11 @@ function createServer(client: SiyuanClient): McpServer {
 
 async function main(): Promise<void> {
   const useHttp = process.env.TRANSPORT === "http" || !!process.env.PORT;
-  const client = new SiyuanClient();
+  // Thread process.env so SIYUAN_URL / SIYUAN_KFDB_TOKEN / SIYUAN_KFDB_JWT
+  // set on the process are honored. The SiyuanClient constructor has an
+  // internal process.env fallback for baseUrl too, but passing env here
+  // keeps resolveToken()'s env-var priority working end-to-end.
+  const client = new SiyuanClient({ env: process.env });
 
   if (useHttp) {
     const { randomUUID } = await import("node:crypto");

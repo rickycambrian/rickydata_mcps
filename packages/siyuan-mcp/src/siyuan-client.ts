@@ -67,10 +67,18 @@ export class SiyuanClient {
   private cachedApiKey: string | null = null;
 
   constructor(opts: SiyuanClientOptions = {}) {
-    this.baseUrl = (opts.baseUrl ?? opts.env?.SIYUAN_URL ?? DEFAULT_SIYUAN_URL).replace(
-      /\/+$/,
-      "",
-    );
+    // Resolve base URL in priority order:
+    //   1. explicit opts.baseUrl
+    //   2. SIYUAN_URL from opts.env (explicit env injection for tests)
+    //   3. SIYUAN_URL from process.env (common runtime path — prior versions
+    //      forgot this fallback, so callers that passed no options always
+    //      hit DEFAULT_SIYUAN_URL even when the operator set SIYUAN_URL=… on
+    //      the process. Bug surfaced in M1-DV-1 smoke.)
+    //   4. DEFAULT_SIYUAN_URL
+    const envUrl =
+      opts.env?.SIYUAN_URL ??
+      (typeof process !== "undefined" ? process.env?.SIYUAN_URL : undefined);
+    this.baseUrl = (opts.baseUrl ?? envUrl ?? DEFAULT_SIYUAN_URL).replace(/\/+$/, "");
     const fallback =
       typeof globalThis.fetch === "function"
         ? (globalThis.fetch.bind(globalThis) as FetchLike)

@@ -273,23 +273,68 @@ describe("siyuan_run_rdm_cell", () => {
 });
 
 describe("siyuan_read_cell_output", () => {
-  it("GETs the RDM HTTP-proxy snapshot endpoint", async () => {
-    const scope = nock(SIYUAN_BASE)
-      .get("/api/rdm/http/api/notebooks/doc-9/cells/cell-1/output")
-      .query({ kfdb_token: "sekret" })
-      .reply(200, {
-        code: 0,
-        msg: "",
-        data: { cell_id: "cell-1", display: [{ mime_type: "text/plain", data: "hi" }] },
-      });
+  it("re-runs the cell over WS and returns the UNCAPPED display payload", async () => {
+    const giant = "P".repeat(10_000);
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "RunCell" && msg.cell_id === "cell-raw") {
+        sendServer(ws, {
+          type: "CellResult",
+          cell_id: "cell-raw",
+          display: [{ mime_type: "image/png", data: giant }],
+          stdout: "",
+          stderr: "",
+          defines: [],
+          duration_ms: 2,
+        });
+      }
+    });
+    teardown = close;
 
-    const { tools } = harness("ws://unused");
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+
     const out = await call(tools, "siyuan_read_cell_output", {
       doc_id: "doc-9",
-      cell_id: "cell-1",
+      cell_id: "cell-raw",
     });
-    expect(out.cellId).toBe("cell-1");
-    expect((out.output as { display: Array<{ data: string }> }).display[0].data).toBe("hi");
-    scope.done();
+    expect(out.ok).toBe(true);
+    expect(out.cellId).toBe("cell-raw");
+    // Crucially: no "[truncated]" suffix — the raw blob is returned in full.
+    const display = (out.display as Array<{ data: string; dataSizeBytes: number }>)[0];
+    expect(display.data).toBe(giant);
+    expect(display.data).not.toContain("[truncated]");
+    expect(display.dataSizeBytes).toBe(10_000);
+  });
+
+  it("surfaces CellError cleanly via the same WS path", async () => {
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "RunCell") {
+        sendServer(ws, {
+          type: "CellError",
+          cell_id: "c-fail",
+          message: "boom",
+          traceback: null,
+          line: 1,
+          kind: "execution",
+        });
+      }
+    });
+    teardown = close;
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+    const out = await call(tools, "siyuan_read_cell_output", {
+      doc_id: "d",
+      cell_id: "c-fail",
+    });
+    expect(out.ok).toBe(false);
+    expect(out.errorMessage).toBe("boom");
   });
 });
