@@ -32,7 +32,11 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install workspace dependencies
-        run: npm ci
+        # Intentionally `npm install` rather than `npm ci`: the lockfile is
+        # authored on macOS and excludes the linux @rollup/rollup-linux-x64-gnu
+        # optional native binary (npm/cli#4828). `npm install` resolves the
+        # correct platform-specific optionalDependencies.
+        run: npm install --no-audit --no-fund
         working-directory: .
 
       - name: Build
