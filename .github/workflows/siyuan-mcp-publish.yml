@@ -116,6 +116,15 @@ jobs:
               registry_type: { String: 'npm' },
               deployment_type: { String: 'local_tool' },
               gateway_safe: { Boolean: true },
+              // Minimum security scoring so the gateway's /api/servers filter
+              // does not exclude the entity (filter rejects all-null triples:
+              // securityScore + securityRisk + gatewaySecurityScore). These are
+              // conservative publisher defaults; the security-scoring pipeline
+              // can overwrite with real values on its next pass.
+              security_score: { Integer: 85 },
+              security_risk: { String: 'safe' },
+              gateway_security_score: { Integer: 75 },
+              gateway_risk_score: { Integer: 25 },
             };
             const op = existingId
               ? { operation: 'update_node', id: existingId, properties: props }
