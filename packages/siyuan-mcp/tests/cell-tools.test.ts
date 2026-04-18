@@ -104,6 +104,139 @@ afterEach(async () => {
   }
 });
 
+describe("siyuan_create_cell — options passthrough (M4-FIX-1)", () => {
+  it("forwards caller-supplied options on AddCell for an mcp (KF) cell", async () => {
+    const recv: Record<string, unknown>[] = [];
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      recv.push(msg);
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "cell-mcp-1",
+            language: "mcp",
+            code: msg.code,
+            options: (msg as { options?: Record<string, unknown> }).options ?? {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+
+    const mcpOptions = {
+      server: "knowledgeflow",
+      tool: "run_sql",
+      source: "lending.daily",
+      mode: "kql",
+      columns: ["wallet", "borrowUsd"],
+      timeoutMs: 30_000,
+    };
+
+    const out = await call(tools, "siyuan_create_cell", {
+      doc_id: "doc-1",
+      language: "mcp",
+      code: "",
+      options: mcpOptions,
+    });
+    expect(out.cellId).toBe("cell-mcp-1");
+
+    const addCellFrame = recv.find((m) => m.type === "AddCell") as {
+      options?: Record<string, unknown>;
+    };
+    expect(addCellFrame.options).toEqual(mcpOptions);
+  });
+
+  it("forwards nested objects and arrays untouched", async () => {
+    const recv: Record<string, unknown>[] = [];
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      recv.push(msg);
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "c",
+            language: "api",
+            code: "",
+            options: {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+
+    const nested = {
+      provider: "cambrian-beta",
+      endpoint: "/lending/pools",
+      params: { chain: "base", limit: 50 },
+      headers: [{ name: "X-Scope", value: "prod" }],
+      retries: 3,
+    };
+
+    await call(tools, "siyuan_create_cell", {
+      doc_id: "d",
+      language: "api",
+      code: "",
+      options: nested,
+    });
+    const addCellFrame = recv.find((m) => m.type === "AddCell") as {
+      options?: unknown;
+    };
+    expect(addCellFrame.options).toEqual(nested);
+  });
+
+  it("omits the options key on the wire when the caller doesn't set it", async () => {
+    const recv: Record<string, unknown>[] = [];
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      recv.push(msg);
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "c",
+            language: "python",
+            code: "",
+            options: {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+
+    await call(tools, "siyuan_create_cell", {
+      doc_id: "d",
+      language: "python",
+      code: "print(1)",
+    });
+    const addCellFrame = recv.find((m) => m.type === "AddCell") as object;
+    expect(Object.keys(addCellFrame)).not.toContain("options");
+  });
+});
+
 describe("siyuan_create_cell", () => {
   it("returns the server-minted cell id for each supported language", async () => {
     for (const language of ["python", "r", "api", "mcp", "ai"] as const) {

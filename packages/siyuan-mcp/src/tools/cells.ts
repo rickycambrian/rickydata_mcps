@@ -77,7 +77,7 @@ export function registerCellTools(
 
   server.tool(
     "siyuan_create_cell",
-    "Append a new RDM cell to a SiYuan document over WebSocket. Returns the server-minted cell_id. Supported languages: python, r, api, mcp (KnowledgeFlow), ai.",
+    "Append a new RDM cell to a SiYuan document over WebSocket. Returns the server-minted cell_id. Supported languages: python, r, api, mcp (KnowledgeFlow), ai. Pass `options` to set cell-type-specific fields rdm-engine's compilers require: e.g. mcp cells need `{server, tool, source, data, mode, columns, timeoutMs}`; ai cells need `{model, ...}`; api cells need provider-specific keys. rdm-engine validates the shape — the MCP forwards verbatim.",
     {
       doc_id: z.string().describe("Document ID (the SiYuan block root) that hosts the RDM notebook."),
       language: z
@@ -89,11 +89,22 @@ export function registerCellTools(
         .nullable()
         .optional()
         .describe("Cell ID to insert after, or null to append at the end of the notebook."),
+      options: z
+        .record(z.unknown())
+        .optional()
+        .describe(
+          "Free-form cell options forwarded to rdm-engine as `AddCell.options`. Required for mcp/ai/api cells; optional for python/r (which ignore unknown keys). See rdm-engine's compile_* functions for the authoritative schema per language.",
+        ),
     },
-    async ({ doc_id, language, code, after }) => {
+    async ({ doc_id, language, code, after, options }) => {
       const ws = await openWsForDoc(doc_id);
       try {
-        const cell = await ws.addCell(language, code, after ?? null);
+        const cell = await ws.addCell(
+          language,
+          code,
+          after ?? null,
+          options as Record<string, unknown> | undefined,
+        );
         return textResult({
           docId: doc_id,
           cellId: cell.id,

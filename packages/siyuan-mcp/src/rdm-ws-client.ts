@@ -22,9 +22,28 @@ export interface DisplayOutput {
   data: string;
 }
 
+/**
+ * Free-form cell options passed through to rdm-engine's compile_* functions.
+ * We deliberately do NOT enumerate the known keys here — that's the engine's
+ * job. Known consumers at time of writing:
+ *   - mcp (KF) cells: `server`, `tool`, `source`, `data`, `mode`, `columns`,
+ *     `timeoutMs`.
+ *   - ai cells: `model` plus provider-specific keys.
+ *   - api cells: provider + endpoint-specific keys.
+ * Passthrough keeps the MCP decoupled from any new options the engine adds
+ * later; if a key is unknown, rdm-engine surfaces the error via CellError.
+ */
+export type CellOptionsPatch = Record<string, unknown>;
+
 export type ClientMessage =
   | { type: "OpenNotebook"; path: string | null }
-  | { type: "AddCell"; language: string; code: string; after: string | null }
+  | {
+      type: "AddCell";
+      language: string;
+      code: string;
+      after: string | null;
+      options?: CellOptionsPatch | null;
+    }
   | { type: "RunCell"; cell_id: string }
   | { type: "Ping" };
 
@@ -154,13 +173,34 @@ export class RdmWsClient extends EventEmitter {
   /**
    * Append a cell to the currently-open notebook. Returns the newly-created
    * cell's full CellInfo (including its server-minted ID).
+   *
+   * `options` is forwarded verbatim as `AddCell.options` on the wire so
+   * rdm-engine's compile_* functions see the expected shape for mcp / ai /
+   * api cells (server, tool, model, etc.). Omit to get the engine default.
    */
-  async addCell(language: string, code: string, after: string | null = null): Promise<CellInfo> {
+  async addCell(
+    language: string,
+    code: string,
+    after: string | null = null,
+    options?: CellOptionsPatch | null,
+  ): Promise<CellInfo> {
     this.requireOpen();
     const added = await this.waitFor<{ type: "CellAdded"; cell: CellInfo }>(
       "CellAdded",
       this.opts.openTimeoutMs,
-      () => this.send({ type: "AddCell", language, code, after }),
+      () => {
+        const frame: Extract<ClientMessage, { type: "AddCell" }> = {
+          type: "AddCell",
+          language,
+          code,
+          after,
+        };
+        // Only include `options` on the wire when the caller supplied one, so
+        // pre-existing no-options callers produce byte-identical frames to the
+        // pre-M4-FIX-1 behavior.
+        if (options !== undefined && options !== null) frame.options = options;
+        this.send(frame);
+      },
     );
     return added.cell;
   }

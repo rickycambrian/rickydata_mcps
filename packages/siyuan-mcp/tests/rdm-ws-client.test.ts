@@ -101,6 +101,152 @@ describe("RdmWsClient.openNotebook", () => {
   });
 });
 
+describe("RdmWsClient.addCell — options forwarding (M4-FIX-1 HEADER_GAP)", () => {
+  it("omits `options` from the wire frame when caller does not pass it (backwards compat)", async () => {
+    const recv: Record<string, unknown>[] = [];
+    const { url, close } = await startMockServer((ws, msg) => {
+      recv.push(msg);
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+      } else if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "c-plain",
+            language: "python",
+            code: "x",
+            options: {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+
+    const client = new RdmWsClient({ wsUrl: url });
+    await client.openNotebook("d");
+    await client.addCell("python", "x");
+    client.close();
+
+    const addCell = recv.find((m) => m.type === "AddCell");
+    expect(addCell).toBeDefined();
+    // Backwards compat guard: older rdm-engine builds may treat an undefined
+    // `options` key differently from a missing one. Keep the frame shape
+    // identical to pre-M4-FIX-1 when the caller didn't provide options.
+    expect(Object.keys(addCell as object)).not.toContain("options");
+  });
+
+  it("forwards caller-supplied options verbatim on the AddCell frame", async () => {
+    const recv: Record<string, unknown>[] = [];
+    const { url, close } = await startMockServer((ws, msg) => {
+      recv.push(msg);
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+      } else if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "c-mcp",
+            language: "mcp",
+            code: "",
+            options: (msg as { options?: Record<string, unknown> }).options ?? {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+
+    const mcpOptions = {
+      server: "knowledgeflow",
+      tool: "run_sql",
+      source: "lending.daily",
+      mode: "kql",
+      columns: ["wallet", "borrowUsd"],
+      timeoutMs: 30_000,
+    };
+
+    const client = new RdmWsClient({ wsUrl: url });
+    await client.openNotebook("d");
+    const cell = await client.addCell("mcp", "", null, mcpOptions);
+    client.close();
+
+    const addCell = recv.find((m) => m.type === "AddCell") as {
+      options?: Record<string, unknown>;
+    };
+    expect(addCell.options).toEqual(mcpOptions);
+    // Cell echoed back carries the options through so downstream code paths
+    // that inspect CellInfo.options see the same thing rdm-engine would.
+    expect(cell.options).toEqual(mcpOptions);
+  });
+
+  it("forwards an `ai` cell's `model` option", async () => {
+    const recv: Record<string, unknown>[] = [];
+    const { url, close } = await startMockServer((ws, msg) => {
+      recv.push(msg);
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+      } else if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "c-ai",
+            language: "ai",
+            code: "",
+            options: {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+
+    const client = new RdmWsClient({ wsUrl: url });
+    await client.openNotebook("d");
+    await client.addCell("ai", "summarize this", null, { model: "claude-opus-4-7" });
+    client.close();
+
+    const addCell = recv.find((m) => m.type === "AddCell") as {
+      options?: Record<string, unknown>;
+    };
+    expect(addCell.options).toEqual({ model: "claude-opus-4-7" });
+  });
+
+  it("treats an explicit null options as 'no options' (wire frame omits the key)", async () => {
+    const recv: Record<string, unknown>[] = [];
+    const { url, close } = await startMockServer((ws, msg) => {
+      recv.push(msg);
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+      } else if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "c-null",
+            language: "python",
+            code: "",
+            options: {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+
+    const client = new RdmWsClient({ wsUrl: url });
+    await client.openNotebook("d");
+    await client.addCell("python", "x", null, null);
+    client.close();
+
+    const addCell = recv.find((m) => m.type === "AddCell") as object;
+    expect(Object.keys(addCell)).not.toContain("options");
+  });
+});
+
 describe("RdmWsClient.addCell", () => {
   it("sends AddCell and resolves with the server-minted CellInfo", async () => {
     const { url, close } = await startMockServer((ws, msg) => {
