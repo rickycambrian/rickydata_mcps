@@ -28,15 +28,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
 
       - name: Install workspace dependencies
-        # Intentionally `npm install` rather than `npm ci`: the lockfile is
-        # authored on macOS and excludes the linux @rollup/rollup-linux-x64-gnu
-        # optional native binary (npm/cli#4828). `npm install` resolves the
-        # correct platform-specific optionalDependencies.
-        run: npm install --no-audit --no-fund
+        # The lockfile is authored on macOS and pins the darwin rollup native
+        # binary but not @rollup/rollup-linux-x64-gnu (npm/cli#4828). Remove
+        # the lockfile so `npm install` re-resolves platform-specific
+        # optionalDependencies on ubuntu-latest.
+        run: |
+          rm -f package-lock.json
+          npm install --no-audit --no-fund
         working-directory: .
 
       - name: Build
