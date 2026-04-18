@@ -1,6 +1,6 @@
 {
   "name": "@rickydata/siyuan-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "description": "MCP server for driving a deployed SiYuan instance (notebooks, docs, SQL, RDM cells).",
   "repository": {
@@ -11,7 +11,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "siyuan-mcp": "dist/cli.js"
+    "siyuan-mcp": "dist/bin.js"
   },
   "exports": {
     ".": "./dist/index.js"

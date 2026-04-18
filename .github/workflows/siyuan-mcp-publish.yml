@@ -116,6 +116,22 @@ jobs:
               registry_type: { String: 'npm' },
               deployment_type: { String: 'local_tool' },
               gateway_safe: { Boolean: true },
+              // Auth model: all three sources are ALTERNATIVES, not cumulative.
+              // resolveToken() in src/auth.ts picks the first present source:
+              //   1. SIYUAN_KFDB_TOKEN env
+              //   2. SIYUAN_KFDB_JWT env (exchanged once, key in-memory only)
+              //   3. ~/.siyuan-mcp/credentials.json (paste-back token, local)
+              // The server itself does NOT require any of these to be present
+              // at boot — resolveToken is called on first tool invocation.
+              // secrets_required=[] communicates this to gateway enrichment
+              // so spawn pre-checks don't block on phantom env vars.
+              // (M3-DV-1 Bug A.)
+              secrets_required: { String: JSON.stringify([]) },
+              secrets_optional: { String: JSON.stringify([
+                { name: 'SIYUAN_KFDB_TOKEN', description: 'KFDB API key; used directly as ?kfdb_token=. Preferred for scripting.' },
+                { name: 'SIYUAN_KFDB_JWT', description: 'KnowledgeFlow Google-OAuth JWT; exchanged once at first use.' },
+                { name: 'SIYUAN_URL', description: 'SiYuan base URL. Defaults to https://siyuan.rickydata.org.' },
+              ]) },
               // Minimum security scoring so the gateway's /api/servers filter
               // does not exclude the entity (filter rejects all-null triples:
               // securityScore + securityRisk + gatewaySecurityScore). These are

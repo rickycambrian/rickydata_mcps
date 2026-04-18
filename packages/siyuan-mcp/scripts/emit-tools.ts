@@ -20,7 +20,7 @@ import { registerAllTools } from "../src/tools/index.js";
 async function main(): Promise<void> {
   const outPath = process.env.OUT || "/tmp/tools_available.json";
 
-  const server = new McpServer({ name: "siyuan-mcp", version: "0.2.0" });
+  const server = new McpServer({ name: "siyuan-mcp", version: "0.2.1" });
   // Use a dummy apiKey so tool registration doesn't try to resolve credentials.
   const siyuan = new SiyuanClient({
     baseUrl: process.env.SIYUAN_URL || "https://siyuan.rickydata.org",
