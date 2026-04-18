@@ -4,6 +4,11 @@ import { registerNotebookTools } from "./notebooks.js";
 import { registerDocumentTools } from "./documents.js";
 import { registerQueryTools } from "./query.js";
 import { registerKfdbTools } from "./kfdb.js";
+import { registerCellTools, CELL_TOOL_NAMES, type CellToolOptions } from "./cells.js";
+
+export interface ToolRegistrationOptions {
+  cellOptions?: CellToolOptions;
+}
 
 /**
  * Register every HTTP-backed SiYuan MCP tool on the given server. Tool-file
@@ -17,6 +22,15 @@ export function registerHttpTools(server: McpServer, client: SiyuanClient): void
   registerKfdbTools(server, client);
 }
 
+export function registerAllTools(
+  server: McpServer,
+  client: SiyuanClient,
+  opts: ToolRegistrationOptions = {},
+): void {
+  registerHttpTools(server, client);
+  registerCellTools(server, client, opts.cellOptions);
+}
+
 export const HTTP_TOOL_NAMES = [
   "siyuan_list_notebooks",
   "siyuan_list_docs",
@@ -28,3 +42,7 @@ export const HTTP_TOOL_NAMES = [
   "siyuan_trigger_kfdb_sync",
   "siyuan_get_backlinks",
 ] as const;
+
+export const ALL_TOOL_NAMES = [...HTTP_TOOL_NAMES, ...CELL_TOOL_NAMES] as const;
+
+export { CELL_TOOL_NAMES };
