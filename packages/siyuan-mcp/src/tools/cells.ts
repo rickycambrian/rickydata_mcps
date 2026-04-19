@@ -5,6 +5,34 @@ import { buildRdmWsUrl, RdmWsClient, type CellOutcome, type WebSocketFactory } f
 import { textResult } from "./response.js";
 
 /**
+ * Build the markdown fence text for an RDM cell, matching the format that
+ * `buildImportMarkdown` in `kernel/api/rdm.go:368` emits and that
+ * `app/src/protyle/ui/rdmCell.ts` renders.
+ *
+ * Fence info-string format (per rdm-engine convention):
+ *   ```rdm-<lang>           (no options)
+ *   ```rdm-<lang> {"k":"v"} (with options — JSON must be non-empty object)
+ *
+ * Strategy note: we always use /api/block/appendBlock (never /api/rdm/import)
+ * because /api/rdm/import requires a Privy-wallet session that the
+ * ?kfdb_token= iframe-auth bypass does not provide (see rdm-import-endpoint
+ * skill, "Known 401 failure modes"). The fence info-string path works for all
+ * cell languages; rdm-engine and the protyle renderer both tolerate options
+ * supplied as a JSON object in the info-string.
+ */
+function buildCellFence(
+  language: string,
+  code: string,
+  options?: Record<string, unknown> | null,
+): string {
+  const optStr =
+    options && Object.keys(options).length > 0 ? " " + JSON.stringify(options) : "";
+  // Trailing newline after the closing fence is required by SiYuan's markdown
+  // parser to correctly terminate the code block.
+  return `\`\`\`rdm-${language}${optStr}\n${code}\n\`\`\`\n`;
+}
+
+/**
  * A handful of knobs the cell tools expose so the same code can drive live
  * SiYuan traffic (default) and the in-process mock WS server in tests.
  */
@@ -98,23 +126,44 @@ export function registerCellTools(
     },
     async ({ doc_id, language, code, after, options }) => {
       const ws = await openWsForDoc(doc_id);
+      let cell: Awaited<ReturnType<RdmWsClient["addCell"]>>;
       try {
-        const cell = await ws.addCell(
+        cell = await ws.addCell(
           language,
           code,
           after ?? null,
           options as Record<string, unknown> | undefined,
         );
-        return textResult({
-          docId: doc_id,
-          cellId: cell.id,
-          language: cell.language,
-          imports: cell.imports,
-          exports: cell.exports,
-        });
       } finally {
         ws.close();
       }
+
+      // Persist the cell as a real SiYuan block via /api/block/appendBlock so
+      // it survives after the ephemeral WS session closes. Without this step
+      // the cell only exists in the rdm-engine sidecar's in-memory notebook
+      // and the doc's block_count never increases (FU-3 bug).
+      //
+      // We use appendBlock (not /api/rdm/import) because /api/rdm/import
+      // requires a Privy-wallet session that the ?kfdb_token= iframe-auth
+      // bypass does not provide — see rdm-import-endpoint skill §"Known 401
+      // failure modes". The fence info-string options path works for all
+      // languages; rdm-engine and the protyle renderer tolerate options as
+      // inline JSON in the info-string.
+      const fence = buildCellFence(language, code, options as Record<string, unknown> | undefined);
+      await client.post<unknown>("/api/block/appendBlock", {
+        dataType: "markdown",
+        data: fence,
+        parentID: doc_id,
+      });
+
+      return textResult({
+        docId: doc_id,
+        cellId: cell.id,
+        language: cell.language,
+        imports: cell.imports,
+        exports: cell.exports,
+        persisted: true,
+      });
     },
   );
 

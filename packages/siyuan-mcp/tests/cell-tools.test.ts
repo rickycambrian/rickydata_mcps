@@ -88,10 +88,34 @@ function sendServer(ws: WebSocket, msg: unknown): void {
   ws.send(JSON.stringify(msg));
 }
 
+/**
+ * Register a nock interceptor for POST /api/block/appendBlock (FU-3 persistence).
+ * Returns the nock scope so callers can call scope.done() to assert it was hit.
+ */
+function mockAppendBlock(docId: string, language: string): nock.Scope {
+  return nock(SIYUAN_BASE)
+    .post("/api/block/appendBlock", (body: Record<string, unknown>) => {
+      return (
+        body.parentID === docId &&
+        body.dataType === "markdown" &&
+        typeof body.data === "string" &&
+        (body.data as string).includes(`rdm-${language}`)
+      );
+    })
+    .query({ kfdb_token: "sekret" })
+    .reply(200, {
+      code: 0,
+      msg: "",
+      data: [{ doOperations: [{ id: "blk-appended-1" }] }],
+    });
+}
+
 let teardown: (() => Promise<void>) | null = null;
 
 beforeEach(() => {
   nock.disableNetConnect();
+  // Allow both the local WS mock server (127.0.0.1) and nock-intercepted HTTPS
+  // traffic to siyuan.test (nock intercepts that before the network is reached).
   nock.enableNetConnect(/127\.0\.0\.1/);
 });
 
@@ -102,6 +126,221 @@ afterEach(async () => {
     await teardown();
     teardown = null;
   }
+});
+
+describe("siyuan_create_cell — persistence via appendBlock (FU-3)", () => {
+  it("calls POST /api/block/appendBlock after WS AddCell for a python cell", async () => {
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "cell-persist-py",
+            language: "python",
+            code: msg.code,
+            options: {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+
+    const appendScope = mockAppendBlock("doc-persist", "python");
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+
+    const out = await call(tools, "siyuan_create_cell", {
+      doc_id: "doc-persist",
+      language: "python",
+      code: "print('hello')",
+    });
+
+    // The tool must report persisted:true and still return the WS-minted cell_id.
+    expect(out.cellId).toBe("cell-persist-py");
+    expect(out.persisted).toBe(true);
+    // Assert the HTTP persistence call was actually made.
+    appendScope.done();
+  });
+
+  it("calls POST /api/block/appendBlock for an mcp cell with options in the fence info-string", async () => {
+    const mcpOptions = {
+      server: "knowledgeflow",
+      tool: "run_sql",
+      source: "lending.daily",
+      mode: "kql",
+    };
+
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "cell-persist-mcp",
+            language: "mcp",
+            code: msg.code,
+            options: (msg as { options?: Record<string, unknown> }).options ?? {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+
+    // More precise nock that also checks the fence includes the JSON options.
+    const appendScope = nock(SIYUAN_BASE)
+      .post("/api/block/appendBlock", (body: Record<string, unknown>) => {
+        const data = body.data as string;
+        return (
+          body.parentID === "doc-mcp" &&
+          data.includes("rdm-mcp") &&
+          data.includes('"server":"knowledgeflow"')
+        );
+      })
+      .query({ kfdb_token: "sekret" })
+      .reply(200, { code: 0, msg: "", data: [{ doOperations: [{ id: "blk-mcp-1" }] }] });
+
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+
+    const out = await call(tools, "siyuan_create_cell", {
+      doc_id: "doc-mcp",
+      language: "mcp",
+      code: "",
+      options: mcpOptions,
+    });
+
+    expect(out.cellId).toBe("cell-persist-mcp");
+    expect(out.persisted).toBe(true);
+    appendScope.done();
+  });
+
+  it("calls appendBlock for an ai cell with options", async () => {
+    const aiOptions = { model: "claude-3-7-sonnet" };
+
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "cell-ai-1",
+            language: "ai",
+            code: "Summarize lending risks.",
+            options: aiOptions,
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+
+    const appendScope = mockAppendBlock("doc-ai", "ai");
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+
+    const out = await call(tools, "siyuan_create_cell", {
+      doc_id: "doc-ai",
+      language: "ai",
+      code: "Summarize lending risks.",
+      options: aiOptions,
+    });
+
+    expect(out.cellId).toBe("cell-ai-1");
+    expect(out.persisted).toBe(true);
+    appendScope.done();
+  });
+
+  it("calls appendBlock for an r cell (no options)", async () => {
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "cell-r-1",
+            language: "r",
+            code: "summary(mtcars)",
+            options: {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+
+    const appendScope = mockAppendBlock("doc-r", "r");
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+
+    const out = await call(tools, "siyuan_create_cell", {
+      doc_id: "doc-r",
+      language: "r",
+      code: "summary(mtcars)",
+    });
+
+    expect(out.cellId).toBe("cell-r-1");
+    expect(out.persisted).toBe(true);
+    appendScope.done();
+  });
+
+  it("fence data for python cell without options has no trailing space before newline", async () => {
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: { id: "c-fence", language: "python", code: "x=1", options: {}, imports: [], exports: [] },
+        });
+      }
+    });
+    teardown = close;
+
+    let capturedBody: Record<string, unknown> = {};
+    nock(SIYUAN_BASE)
+      .post("/api/block/appendBlock", (body: Record<string, unknown>) => {
+        capturedBody = body;
+        return true;
+      })
+      .query({ kfdb_token: "sekret" })
+      .reply(200, { code: 0, msg: "", data: [] });
+
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+
+    await call(tools, "siyuan_create_cell", {
+      doc_id: "doc-fence",
+      language: "python",
+      code: "x=1",
+    });
+
+    const fence = capturedBody.data as string;
+    // Must open with ```rdm-python (no trailing space before newline).
+    expect(fence).toMatch(/^```rdm-python\n/);
+    expect(fence).toContain("x=1\n");
+    expect(fence).toMatch(/```\n$/);
+  });
 });
 
 describe("siyuan_create_cell — options passthrough (M4-FIX-1)", () => {
@@ -129,9 +368,6 @@ describe("siyuan_create_cell — options passthrough (M4-FIX-1)", () => {
     });
     teardown = close;
 
-    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
-    const { tools } = harness(wsUrl);
-
     const mcpOptions = {
       server: "knowledgeflow",
       tool: "run_sql",
@@ -140,6 +376,12 @@ describe("siyuan_create_cell — options passthrough (M4-FIX-1)", () => {
       columns: ["wallet", "borrowUsd"],
       timeoutMs: 30_000,
     };
+
+    // Persistence call required (FU-3).
+    mockAppendBlock("doc-1", "mcp");
+
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
 
     const out = await call(tools, "siyuan_create_cell", {
       doc_id: "doc-1",
@@ -189,6 +431,9 @@ describe("siyuan_create_cell — options passthrough (M4-FIX-1)", () => {
       retries: 3,
     };
 
+    // Persistence call required (FU-3).
+    mockAppendBlock("d", "api");
+
     await call(tools, "siyuan_create_cell", {
       doc_id: "d",
       language: "api",
@@ -227,6 +472,9 @@ describe("siyuan_create_cell — options passthrough (M4-FIX-1)", () => {
     const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
     const { tools } = harness(wsUrl);
 
+    // Persistence call required (FU-3).
+    mockAppendBlock("d", "python");
+
     await call(tools, "siyuan_create_cell", {
       doc_id: "d",
       language: "python",
@@ -260,6 +508,9 @@ describe("siyuan_create_cell", () => {
         }
       });
       teardown = close;
+
+      // Persistence call required (FU-3).
+      mockAppendBlock("doc-1", language);
 
       const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
       const { tools } = harness(wsUrl);
@@ -314,6 +565,9 @@ describe("siyuan_run_rdm_cell", () => {
       });
       teardown = close;
 
+      // Persistence call required (FU-3).
+      mockAppendBlock("d1", language);
+
       const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
       const { tools } = harness(wsUrl);
 
@@ -361,6 +615,10 @@ describe("siyuan_run_rdm_cell", () => {
     teardown = close;
     const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
     const { tools } = harness(wsUrl);
+
+    // Persistence call required (FU-3).
+    mockAppendBlock("d", "python");
+
     await call(tools, "siyuan_create_cell", { doc_id: "d", language: "python", code: "1/0" });
     const run = await call(tools, "siyuan_run_rdm_cell", { doc_id: "d", cell_id: "c-e" });
     expect(run.ok).toBe(false);
@@ -397,6 +655,10 @@ describe("siyuan_run_rdm_cell", () => {
     teardown = close;
     const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
     const { tools } = harness(wsUrl);
+
+    // Persistence call required (FU-3).
+    mockAppendBlock("d", "python");
+
     await call(tools, "siyuan_create_cell", { doc_id: "d", language: "python", code: "" });
     const run = await call(tools, "siyuan_run_rdm_cell", { doc_id: "d", cell_id: "c-big" });
     expect(run.display[0].dataSizeBytes).toBe(10_000);

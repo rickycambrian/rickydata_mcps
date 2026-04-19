@@ -53,3 +53,21 @@ npx siyuan-mcp logout
 docker build -t siyuan-mcp .
 docker run -p 8080:8080 -e SIYUAN_KFDB_TOKEN=... siyuan-mcp
 ```
+
+## Changelog
+
+### 0.2.3 (2026-04-19)
+
+- **Fix (FU-3)**: `siyuan_create_cell` now persists the cell as a real SiYuan block via `POST /api/block/appendBlock` immediately after the WS `AddCell` handshake. Previously the cell only existed in the rdm-engine sidecar's ephemeral in-memory notebook session, so the doc's `block_count` never increased and the cell was lost on sidecar restart. The response now includes `persisted: true` to confirm the HTTP write succeeded.
+
+### 0.2.2
+
+- `siyuan_create_cell` forwards `options` for ai/mcp/api cells via `AddCell.options` on the WS wire.
+
+### 0.2.1
+
+- CLI `login`/`logout`/`whoami`. Credential file atomicity. `emit-tools` script.
+
+### 0.2.0
+
+- Initial public release: 12 tools (9 HTTP + 3 WS cell tools). Dual-transport (stdio/HTTP). JWT-exchange auth.
