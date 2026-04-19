@@ -128,9 +128,9 @@ export interface RdmWsClientOptions {
   openTimeoutMs?: number;
 }
 
-const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
-const DEFAULT_OPEN_TIMEOUT_MS = 15_000;
-const DEFAULT_AWAIT_TIMEOUT_MS = 60_000;
+const DEFAULT_CONNECT_TIMEOUT_MS = 45_000;
+const DEFAULT_OPEN_TIMEOUT_MS = 60_000;
+const DEFAULT_AWAIT_TIMEOUT_MS = 180_000;
 
 /**
  * Thin wrapper over `ws.WebSocket` that exposes the three operations the MCP

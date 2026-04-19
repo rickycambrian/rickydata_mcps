@@ -5,7 +5,7 @@ import { SiyuanClient } from "./siyuan-client.js";
 import { registerTools } from "./tools.js";
 
 const SERVER_NAME = "siyuan-mcp";
-const SERVER_VERSION = "0.2.1";
+const SERVER_VERSION = "0.2.2";
 
 function createServer(client: SiyuanClient): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
