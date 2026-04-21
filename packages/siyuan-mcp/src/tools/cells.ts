@@ -45,7 +45,7 @@ export interface CellToolOptions {
   runTimeoutMs?: number;
 }
 
-export const CELL_LANGUAGES = ["python", "r", "api", "mcp", "ai"] as const;
+export const CELL_LANGUAGES = ["python", "r", "ggsql", "ggkql", "api", "mcp", "ai"] as const;
 export type CellLanguage = (typeof CELL_LANGUAGES)[number];
 
 /**
@@ -105,12 +105,14 @@ export function registerCellTools(
 
   server.tool(
     "siyuan_create_cell",
-    "Append a new RDM cell to a SiYuan document over WebSocket. Returns the server-minted cell_id. Supported languages: python, r, api, mcp (KnowledgeFlow), ai. Pass `options` to set cell-type-specific fields rdm-engine's compilers require: e.g. mcp cells need `{server, tool, source, data, mode, columns, timeoutMs}`; ai cells need `{model, ...}`; api cells need provider-specific keys. rdm-engine validates the shape — the MCP forwards verbatim.",
+    "Append a new RDM cell to a SiYuan document over WebSocket. Returns the server-minted cell_id. Supported languages: python, r, ggsql, ggkql, api, mcp (KnowledgeFlow), ai. Pass `options` to set cell-type-specific fields rdm-engine's compilers require: e.g. ggsql/ggkql cells use the engine's canonical SQL/KQL shapes, mcp cells need `{server, tool, source, data, mode, columns, timeoutMs}`, ai cells need `{model, ...}`, and api cells need provider-specific keys. rdm-engine validates the shape — the MCP forwards verbatim.",
     {
       doc_id: z.string().describe("Document ID (the SiYuan block root) that hosts the RDM notebook."),
       language: z
         .enum(CELL_LANGUAGES)
-        .describe("Cell language. 'mcp' = KnowledgeFlow data cell; 'ai' = AI-assistance cell."),
+        .describe(
+          "Cell language. 'ggsql' = canonical SQL cell; 'ggkql' = canonical KQL cell; 'mcp' = KnowledgeFlow data cell; 'ai' = AI-assistance cell.",
+        ),
       code: z.string().describe("Cell body (source code, markdown template, or provider config)."),
       after: z
         .string()
@@ -169,7 +171,7 @@ export function registerCellTools(
 
   server.tool(
     "siyuan_run_rdm_cell",
-    "Execute an existing RDM cell inside a SiYuan document. Opens a WS session, sends RunCell, and awaits the terminal CellResult or CellError. Works for python / r / api / mcp / ai cells.",
+    "Execute an existing RDM cell inside a SiYuan document. Opens a WS session, sends RunCell, and awaits the terminal CellResult or CellError. Works for python / r / ggsql / ggkql / api / mcp / ai cells.",
     {
       doc_id: z.string().describe("Document ID hosting the notebook."),
       cell_id: z.string().describe("Target cell ID (returned by siyuan_create_cell)."),
@@ -194,7 +196,7 @@ export function registerCellTools(
 
   server.tool(
     "siyuan_read_cell_output",
-    "Re-execute an existing RDM cell and return its FULL display payload (no 2KB cap). Use this after `siyuan_run_rdm_cell` when you need raw outputs — e.g. the complete base64 blob of a matplotlib PNG. Note: the RDM sidecar does not expose a cached-snapshot HTTP endpoint, so this tool opens a WS session, runs the cell, and waits for the terminal CellResult/CellError. For deterministic cells the output is identical to the previous run.",
+    "Re-execute an existing RDM cell and return its FULL display payload (no 2KB cap). Use this after `siyuan_run_rdm_cell` when you need raw outputs — e.g. the complete base64 blob of a matplotlib PNG. Note: the RDM sidecar does not expose a cached-snapshot HTTP endpoint, so this tool opens a WS session, runs the cell, and waits for the terminal CellResult/CellError. For deterministic cells the output is identical to the previous run. Works for python / r / ggsql / ggkql / api / mcp / ai cells.",
     {
       doc_id: z.string().describe("Document ID hosting the notebook."),
       cell_id: z.string().describe("Target cell ID."),

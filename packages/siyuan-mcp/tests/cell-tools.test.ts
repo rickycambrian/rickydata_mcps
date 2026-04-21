@@ -5,12 +5,13 @@ import { AddressInfo } from "node:net";
 import { WebSocketServer, WebSocket } from "ws";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SiyuanClient } from "../src/siyuan-client.js";
-import { registerCellTools } from "../src/tools/cells.js";
+import { CELL_LANGUAGES, registerCellTools } from "../src/tools/cells.js";
 
 const SIYUAN_BASE = "https://siyuan.test";
 
 interface ToolEntry {
   name: string;
+  description: string;
   handler: (args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }> }>;
 }
 
@@ -61,11 +62,11 @@ function harness(wsUrl: string): { tools: Map<string, ToolEntry>; client: Siyuan
   const fakeServer = {
     tool(
       name: string,
-      _desc: string,
+      description: string,
       _shape: unknown,
       handler: ToolEntry["handler"],
     ) {
-      tools.set(name, { name, handler });
+      tools.set(name, { name, description, handler });
     },
   } as unknown as McpServer;
 
@@ -225,6 +226,17 @@ describe("siyuan_create_cell — persistence via appendBlock (FU-3)", () => {
     appendScope.done();
   });
 
+  it("registers ggsql and ggkql in the create_cell tool contract", () => {
+    const { tools } = harness("ws://127.0.0.1:0/api/rdm/ws?kfdb_token=sekret");
+    const createTool = tools.get("siyuan_create_cell");
+    expect(createTool).toBeDefined();
+    expect(CELL_LANGUAGES).toContain("ggsql");
+    expect(CELL_LANGUAGES).toContain("ggkql");
+    expect(createTool?.description).toContain("ggsql");
+    expect(createTool?.description).toContain("ggkql");
+    expect(createTool?.description).toContain("canonical SQL/KQL");
+  });
+
   it("calls appendBlock for an ai cell with options", async () => {
     const aiOptions = { model: "claude-3-7-sonnet" };
 
@@ -298,6 +310,80 @@ describe("siyuan_create_cell — persistence via appendBlock (FU-3)", () => {
     });
 
     expect(out.cellId).toBe("cell-r-1");
+    expect(out.persisted).toBe(true);
+    appendScope.done();
+  });
+
+  it("calls appendBlock for a ggsql cell (no options)", async () => {
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "cell-ggsql-1",
+            language: "ggsql",
+            code: "SELECT 1",
+            options: {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+
+    const appendScope = mockAppendBlock("doc-ggsql", "ggsql");
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+
+    const out = await call(tools, "siyuan_create_cell", {
+      doc_id: "doc-ggsql",
+      language: "ggsql",
+      code: "SELECT 1",
+    });
+
+    expect(out.cellId).toBe("cell-ggsql-1");
+    expect(out.persisted).toBe(true);
+    appendScope.done();
+  });
+
+  it("calls appendBlock for a ggkql cell (no options)", async () => {
+    const { baseUrl, close } = await startMockRdm((ws, msg) => {
+      if (msg.type === "OpenNotebook") {
+        sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+        return;
+      }
+      if (msg.type === "AddCell") {
+        sendServer(ws, {
+          type: "CellAdded",
+          cell: {
+            id: "cell-ggkql-1",
+            language: "ggkql",
+            code: "MATCH (n) RETURN COUNT(n)",
+            options: {},
+            imports: [],
+            exports: [],
+          },
+        });
+      }
+    });
+    teardown = close;
+
+    const appendScope = mockAppendBlock("doc-ggkql", "ggkql");
+    const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+    const { tools } = harness(wsUrl);
+
+    const out = await call(tools, "siyuan_create_cell", {
+      doc_id: "doc-ggkql",
+      language: "ggkql",
+      code: "MATCH (n) RETURN COUNT(n)",
+    });
+
+    expect(out.cellId).toBe("cell-ggkql-1");
     expect(out.persisted).toBe(true);
     appendScope.done();
   });
@@ -487,7 +573,7 @@ describe("siyuan_create_cell — options passthrough (M4-FIX-1)", () => {
 
 describe("siyuan_create_cell", () => {
   it("returns the server-minted cell id for each supported language", async () => {
-    for (const language of ["python", "r", "api", "mcp", "ai"] as const) {
+    for (const language of CELL_LANGUAGES) {
       const { baseUrl, close } = await startMockRdm((ws, msg) => {
         if (msg.type === "OpenNotebook") {
           sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
@@ -528,7 +614,7 @@ describe("siyuan_create_cell", () => {
 });
 
 describe("siyuan_run_rdm_cell", () => {
-  it.each(["python", "r", "api", "mcp", "ai"])(
+  it.each(CELL_LANGUAGES)(
     "drives AddCell → RunCell → CellResult for %s",
     async (language) => {
       const { baseUrl, close } = await startMockRdm((ws, msg) => {
@@ -668,6 +754,45 @@ describe("siyuan_run_rdm_cell", () => {
 });
 
 describe("siyuan_read_cell_output", () => {
+  it.each(["ggsql", "ggkql"] as const)(
+    "re-runs a %s cell and returns the uncapped display payload",
+    async (language) => {
+      const giant = "P".repeat(10_000);
+      const { baseUrl, close } = await startMockRdm((ws, msg) => {
+        if (msg.type === "OpenNotebook") {
+          sendServer(ws, { type: "NotebookLoaded", cells: [], title: null });
+          return;
+        }
+        if (msg.type === "RunCell" && msg.cell_id === `cell-${language}`) {
+          sendServer(ws, {
+            type: "CellResult",
+            cell_id: `cell-${language}`,
+            display: [{ mime_type: "text/plain", data: giant }],
+            stdout: "",
+            stderr: "",
+            defines: [],
+            duration_ms: 2,
+          });
+        }
+      });
+      teardown = close;
+
+      const wsUrl = `${baseUrl}/api/rdm/ws?kfdb_token=sekret`;
+      const { tools } = harness(wsUrl);
+
+      const out = await call(tools, "siyuan_read_cell_output", {
+        doc_id: "doc-9",
+        cell_id: `cell-${language}`,
+      });
+      expect(out.ok).toBe(true);
+      expect(out.cellId).toBe(`cell-${language}`);
+      const display = (out.display as Array<{ data: string; dataSizeBytes: number }>)[0];
+      expect(display.data).toBe(giant);
+      expect(display.data).not.toContain("[truncated]");
+      expect(display.dataSizeBytes).toBe(10_000);
+    },
+  );
+
   it("re-runs the cell over WS and returns the UNCAPPED display payload", async () => {
     const giant = "P".repeat(10_000);
     const { baseUrl, close } = await startMockRdm((ws, msg) => {
