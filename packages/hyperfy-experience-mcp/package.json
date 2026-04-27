@@ -5,7 +5,7 @@
   "description": "MCP server for planning, generating, registering, and publishing RickyData Hyperfy experiences",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rickycambrian/rickydata_mcps",
+    "url": "git+https://github.com/rickycambrian/rickydata_mcps.git",
     "directory": "packages/hyperfy-experience-mcp"
   },
   "type": "module",
