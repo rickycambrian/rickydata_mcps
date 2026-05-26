@@ -146,7 +146,7 @@ jobs:
           SOURCE_COMMIT: ${{ github.sha }}
         run: |
           node <<'NODE'
-          const fs = require('fs');
+          import fs from 'node:fs';
 
           const kfdbUrl = process.env.KFDB_URL;
           const apiKey = process.env.KFDB_API_KEY;
