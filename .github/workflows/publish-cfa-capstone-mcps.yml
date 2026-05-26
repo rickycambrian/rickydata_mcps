@@ -72,7 +72,9 @@ jobs:
 
       - name: Install workspace dependencies
         if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
-        run: npm install --no-audit --no-fund
+        run: |
+          rm -f package-lock.json
+          npm install --no-audit --no-fund
 
       - name: Build package
         if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
