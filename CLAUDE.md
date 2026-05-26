@@ -56,3 +56,4 @@ npm run dev
 - **`mcp-patterns`**: Reusable patterns (dual transport, tool organization, response capping, Zod validation)
 - **`research-papers-dev`**: Verified build/run/test workflow for `research-papers-mcp` — use when working on that package
 - **`agent-update-workflow`**: Verified process for updating agent definitions in mcp_deployments_registry to use new/updated MCP servers
+- **`cfa-capstone-mcps`**: Verified local test/build/smoke workflow for the CFA capstone SEC, macro, tradfi market data, Hyperliquid microstructure, and evidence MCP servers
