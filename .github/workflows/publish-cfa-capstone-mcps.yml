@@ -115,19 +115,18 @@ jobs:
           TOOL_COUNT=$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/tools_available.json','utf8')).length)")
           echo "count=$TOOL_COUNT" >> "$GITHUB_OUTPUT"
 
-      - name: Publish to npm if version is not already published
+      - name: Check npm publication status
         if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
         id: publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: "true"
         run: |
           if npm view "${{ matrix.package_name }}@${{ steps.version.outputs.version }}" version >/tmp/npm-view.txt 2>/dev/null; then
             echo "published=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::${{ matrix.package_name }}@${{ steps.version.outputs.version }} already exists on npm; skipping npm publish"
+            echo "registry=npm" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.package_name }}@${{ steps.version.outputs.version }} already exists on npm"
           else
-            npm publish --workspace "${{ matrix.package_name }}" --access public --provenance
-            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "registry=git" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.package_name }}@${{ steps.version.outputs.version }} is not on npm; registering source-backed git server"
           fi
 
       - name: Build KFDB MCPServer payload
@@ -142,6 +141,9 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           TOOLS_COUNT: ${{ steps.tools.outputs.count }}
           SECRETS_OPTIONAL: ${{ matrix.secrets_optional }}
+          REGISTRY_TYPE: ${{ steps.publish.outputs.registry }}
+          SOURCE_REPOSITORY: https://github.com/rickycambrian/rickydata_mcps
+          SOURCE_COMMIT: ${{ github.sha }}
         run: |
           node <<'NODE'
           const fs = require('fs');
@@ -154,6 +156,16 @@ jobs:
           const packageDir = process.env.PACKAGE_DIR;
           const tools = JSON.parse(fs.readFileSync('/tmp/tools_available.json', 'utf8'));
           const secretsOptional = JSON.parse(process.env.SECRETS_OPTIONAL || '[]');
+          const registryType = process.env.REGISTRY_TYPE || 'git';
+          const sourceRepository = process.env.SOURCE_REPOSITORY;
+          const sourceCommit = process.env.SOURCE_COMMIT;
+          const packageSubdir = `packages/${packageDir}`;
+          const installCommand = registryType === 'npm'
+            ? `npx -y ${pkg}@${version}`
+            : `git clone ${sourceRepository} && cd rickydata_mcps/${packageSubdir} && npm install && npm run build`;
+          const runCommand = registryType === 'npm'
+            ? `npx -y ${pkg}@${version}`
+            : 'npm start';
 
           function unwrap(value) {
             if (value && typeof value === 'object') {
@@ -184,12 +196,13 @@ jobs:
             description: { String: `RickyData CFA capstone MCP server: ${serverName}` },
             tools_count: { Integer: tools.length },
             tools_available: { String: JSON.stringify(tools) },
-            install_command: { String: `npx -y ${pkg}@${version}` },
-            run_command: { String: `npx -y ${pkg}@${version}` },
+            install_command: { String: installCommand },
+            run_command: { String: runCommand },
             enriched_at: { String: new Date().toISOString() },
             enrichment_version: { Integer: 5 },
             gateway_compatible: { Boolean: true },
-            registry_type: { String: 'npm' },
+            gateway_runnable: { Boolean: true },
+            registry_type: { String: registryType },
             deployment_type: { String: 'local_tool' },
             transport_type: { String: 'stdio' },
             can_run_standalone: { Boolean: true },
@@ -204,8 +217,11 @@ jobs:
             required_credentials: { String: JSON.stringify([]) },
             secrets_optional: { String: JSON.stringify(secretsOptional) },
             categories: { String: JSON.stringify(['Finance', 'Research', 'CFA', 'Capstone']) },
-            source_repository: { String: 'https://github.com/rickycambrian/rickydata_mcps' },
-            package_subdir: { String: `packages/${packageDir}` },
+            source_repository: { String: sourceRepository },
+            repository_url: { String: sourceRepository },
+            repository_subfolder: { String: packageSubdir },
+            last_enriched_commit_sha: { String: sourceCommit },
+            package_subdir: { String: packageSubdir },
           };
 
           const op = existingId
@@ -274,6 +290,6 @@ jobs:
             echo ""
             echo "- Version: \`${{ steps.version.outputs.version }}\`"
             echo "- Tools: \`${{ steps.tools.outputs.count }}\`"
-            echo "- npm published this run: \`${{ steps.publish.outputs.published }}\`"
+            echo "- Registry mode: \`${{ steps.publish.outputs.registry }}\`"
             echo "- KFDB MCPServer id: \`${{ steps.kfdb.outputs.node_id }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
