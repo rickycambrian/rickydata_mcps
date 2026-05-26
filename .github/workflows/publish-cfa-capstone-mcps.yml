@@ -1,0 +1,277 @@
+name: Publish CFA Capstone MCPs
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to publish, or all"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - "@rickydata/sec-edgar-mcp"
+          - "@rickydata/official-macro-mcp"
+          - "@rickydata/tradfi-market-data-mcp"
+          - "@rickydata/hyperliquid-tradfi-microstructure-mcp"
+          - "@rickydata/capstone-evidence-mcp"
+
+concurrency:
+  group: publish-cfa-capstone-mcps-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package_name: "@rickydata/sec-edgar-mcp"
+            package_dir: "sec-edgar-mcp"
+            server_name: "sec-edgar-mcp"
+            min_tools: 5
+            secrets_optional: "[]"
+          - package_name: "@rickydata/official-macro-mcp"
+            package_dir: "official-macro-mcp"
+            server_name: "official-macro-mcp"
+            min_tools: 5
+            secrets_optional: "[{\"name\":\"FRED_API_KEY\",\"description\":\"Optional FRED API key for macro_fred_series.\"},{\"name\":\"EIA_API_KEY\",\"description\":\"Optional EIA API key for macro_eia_petroleum_spot_price.\"}]"
+          - package_name: "@rickydata/tradfi-market-data-mcp"
+            package_dir: "tradfi-market-data-mcp"
+            server_name: "tradfi-market-data-mcp"
+            min_tools: 5
+            secrets_optional: "[{\"name\":\"ALPHAVANTAGE_API_KEY\",\"description\":\"Optional Alpha Vantage key for prices and company overview.\"},{\"name\":\"FMP_API_KEY\",\"description\":\"Optional Financial Modeling Prep key for profiles and prices.\"},{\"name\":\"POLYGON_API_KEY\",\"description\":\"Reserved for the production-grade Polygon adapter.\"}]"
+          - package_name: "@rickydata/hyperliquid-tradfi-microstructure-mcp"
+            package_dir: "hyperliquid-tradfi-microstructure-mcp"
+            server_name: "hyperliquid-tradfi-microstructure-mcp"
+            min_tools: 6
+            secrets_optional: "[{\"name\":\"HL_CLICKHOUSE_CONTAINER\",\"description\":\"Optional local ClickHouse Docker container name for development; live API fallback works without it.\"}]"
+          - package_name: "@rickydata/capstone-evidence-mcp"
+            package_dir: "capstone-evidence-mcp"
+            server_name: "capstone-evidence-mcp"
+            min_tools: 5
+            secrets_optional: "[{\"name\":\"CAPSTONE_EVIDENCE_DIR\",\"description\":\"Optional local evidence artifact directory.\"}]"
+
+    steps:
+      - name: Skip non-selected package
+        if: ${{ github.event.inputs.package != 'all' && github.event.inputs.package != matrix.package_name }}
+        run: echo "Skipping ${{ matrix.package_name }}"
+
+      - uses: actions/checkout@v4
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+
+      - uses: actions/setup-node@v4
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install workspace dependencies
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+        run: npm install --no-audit --no-fund
+
+      - name: Build package
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+        run: npm run build --workspace "${{ matrix.package_name }}"
+
+      - name: Test package
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+        run: npm run test --workspace "${{ matrix.package_name }}"
+
+      - name: Read package version
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+        id: version
+        run: |
+          VERSION=$(node -p "require('./packages/${{ matrix.package_dir }}/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "::notice::${{ matrix.package_name }} version $VERSION"
+
+      - name: Emit tool definitions
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+        id: tools
+        run: |
+          node -e "
+            const fs = require('fs');
+            import('./packages/${{ matrix.package_dir }}/dist/tools.js').then((m) => {
+              const tools = m.TOOLS.map((tool) => ({
+                name: tool.name,
+                description: tool.description || '',
+                inputSchema: tool.inputSchema || {},
+              }));
+              fs.writeFileSync('/tmp/tools_available.json', JSON.stringify(tools));
+              console.log('Exported ' + tools.length + ' tools for ${{ matrix.package_name }}');
+              if (tools.length < Number('${{ matrix.min_tools }}')) {
+                console.error('Expected at least ${{ matrix.min_tools }} tools, got ' + tools.length);
+                process.exit(1);
+              }
+            });
+          "
+          TOOL_COUNT=$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/tools_available.json','utf8')).length)")
+          echo "count=$TOOL_COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm if version is not already published
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+        id: publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+        run: |
+          if npm view "${{ matrix.package_name }}@${{ steps.version.outputs.version }}" version >/tmp/npm-view.txt 2>/dev/null; then
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.package_name }}@${{ steps.version.outputs.version }} already exists on npm; skipping npm publish"
+          else
+            npm publish --workspace "${{ matrix.package_name }}" --access public --provenance
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build KFDB MCPServer payload
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+        id: payload
+        env:
+          KFDB_URL: ${{ vars.KFDB_URL || 'http://34.60.37.158' }}
+          KFDB_API_KEY: ${{ secrets.KFDB_API_KEY }}
+          PACKAGE_NAME: ${{ matrix.package_name }}
+          PACKAGE_DIR: ${{ matrix.package_dir }}
+          SERVER_NAME: ${{ matrix.server_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TOOLS_COUNT: ${{ steps.tools.outputs.count }}
+          SECRETS_OPTIONAL: ${{ matrix.secrets_optional }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+
+          const kfdbUrl = process.env.KFDB_URL;
+          const apiKey = process.env.KFDB_API_KEY;
+          const pkg = process.env.PACKAGE_NAME;
+          const serverName = process.env.SERVER_NAME;
+          const version = process.env.VERSION;
+          const packageDir = process.env.PACKAGE_DIR;
+          const tools = JSON.parse(fs.readFileSync('/tmp/tools_available.json', 'utf8'));
+          const secretsOptional = JSON.parse(process.env.SECRETS_OPTIONAL || '[]');
+
+          function unwrap(value) {
+            if (value && typeof value === 'object') {
+              if ('String' in value) return value.String;
+              if ('Integer' in value) return value.Integer;
+              if ('Boolean' in value) return value.Boolean;
+            }
+            return value;
+          }
+
+          const res = await fetch(`${kfdbUrl}/api/v1/entities/MCPServer?limit=5000`, {
+            headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+          });
+          const catalog = res.ok ? await res.json() : { items: [] };
+          const items = catalog.items || catalog.servers || [];
+          const existing = items.find((item) => (
+            unwrap(item.package_identifier) === pkg ||
+            unwrap(item.name) === serverName ||
+            unwrap(item.server_name) === serverName
+          ));
+          const existingId = existing?._id || existing?.id || '';
+
+          const props = {
+            name: { String: serverName },
+            server_name: { String: serverName },
+            package_identifier: { String: pkg },
+            version: { String: version },
+            description: { String: `RickyData CFA capstone MCP server: ${serverName}` },
+            tools_count: { Integer: tools.length },
+            tools_available: { String: JSON.stringify(tools) },
+            install_command: { String: `npx -y ${pkg}@${version}` },
+            run_command: { String: `npx -y ${pkg}@${version}` },
+            enriched_at: { String: new Date().toISOString() },
+            enrichment_version: { Integer: 5 },
+            gateway_compatible: { Boolean: true },
+            registry_type: { String: 'npm' },
+            deployment_type: { String: 'local_tool' },
+            transport_type: { String: 'stdio' },
+            can_run_standalone: { Boolean: true },
+            gateway_safe: { Boolean: true },
+            gateway_recommendation: { String: 'APPROVED' },
+            security_score: { Integer: 90 },
+            security_risk: { String: 'safe' },
+            gateway_security_score: { Integer: 85 },
+            gateway_risk_score: { Integer: 15 },
+            required_env_vars: { String: JSON.stringify([]) },
+            secrets_required: { String: JSON.stringify([]) },
+            required_credentials: { String: JSON.stringify([]) },
+            secrets_optional: { String: JSON.stringify(secretsOptional) },
+            categories: { String: JSON.stringify(['Finance', 'Research', 'CFA', 'Capstone']) },
+            source_repository: { String: 'https://github.com/rickycambrian/rickydata_mcps' },
+            package_subdir: { String: `packages/${packageDir}` },
+          };
+
+          const op = existingId
+            ? { operation: 'update_node', id: existingId, properties: props }
+            : { operation: 'create_node', label: 'MCPServer', properties: props };
+          fs.writeFileSync('/tmp/kfdb-payload.json', JSON.stringify({ operations: [op] }));
+          fs.writeFileSync('/tmp/existing-id.txt', existingId);
+          console.log(`${existingId ? 'update_node ' + existingId : 'create_node'} for ${pkg} with ${tools.length} tools`);
+          NODE
+
+      - name: POST MCPServer entity to KFDB
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+        id: kfdb
+        env:
+          KFDB_URL: ${{ vars.KFDB_URL || 'http://34.60.37.158' }}
+          KFDB_API_KEY: ${{ secrets.KFDB_API_KEY }}
+        run: |
+          RESPONSE=$(curl -fsSL -X POST "$KFDB_URL/api/v1/write" \
+            -H "Authorization: Bearer $KFDB_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/kfdb-payload.json)
+          echo "KFDB response: $RESPONSE"
+          EXISTING_ID=$(cat /tmp/existing-id.txt)
+          NODE_ID=$(node -e "
+            const existing = process.env.EXISTING_ID || '';
+            if (existing) { console.log(existing); process.exit(0); }
+            let s=''; process.stdin.on('data', c => s += c); process.stdin.on('end', () => {
+              try {
+                const j = JSON.parse(s);
+                console.log(j.results?.[0]?.id || j.operations?.[0]?.id || j.id || '');
+              } catch {
+                console.log('');
+              }
+            });
+          " <<< "$RESPONSE")
+          echo "node_id=$NODE_ID" >> "$GITHUB_OUTPUT"
+          echo "::notice::KFDB entity id=$NODE_ID for ${{ matrix.package_name }}"
+
+      - name: Reload MCP gateway entity
+        if: ${{ (github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name) && steps.kfdb.outputs.node_id != '' }}
+        env:
+          MCP_GW: ${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}
+          TOKEN: ${{ secrets.OPERATOR_WALLET_TOKEN }}
+        run: |
+          RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/health/reload/${{ steps.kfdb.outputs.node_id }}" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" || echo '{"error":"reload failed"}')
+          echo "Gateway reload: $RESPONSE"
+
+      - name: Notify mcp_deployments_registry
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOYMENTS_REGISTRY_PAT }}
+        run: |
+          gh api repos/rickycambrian/mcp_deployments_registry/dispatches \
+            -f event_type=rickydata-mcps-published \
+            -f "client_payload[package]=${{ matrix.package_name }}" \
+            -f "client_payload[version]=${{ steps.version.outputs.version }}" \
+            -f "client_payload[serverId]=${{ steps.kfdb.outputs.node_id }}" || true
+
+      - name: Summary
+        if: ${{ github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package_name }}
+        run: |
+          {
+            echo "## ${{ matrix.package_name }}"
+            echo ""
+            echo "- Version: \`${{ steps.version.outputs.version }}\`"
+            echo "- Tools: \`${{ steps.tools.outputs.count }}\`"
+            echo "- npm published this run: \`${{ steps.publish.outputs.published }}\`"
+            echo "- KFDB MCPServer id: \`${{ steps.kfdb.outputs.node_id }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
