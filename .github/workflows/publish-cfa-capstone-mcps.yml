@@ -176,17 +176,34 @@ jobs:
             return value;
           }
 
-          const res = await fetch(`${kfdbUrl}/api/v1/entities/MCPServer?limit=5000`, {
-            headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-          });
-          const catalog = res.ok ? await res.json() : { items: [] };
-          const items = catalog.items || catalog.servers || [];
-          const existing = items.find((item) => (
-            unwrap(item.package_identifier) === pkg ||
-            unwrap(item.name) === serverName ||
-            unwrap(item.server_name) === serverName
-          ));
-          const existingId = existing?._id || existing?.id || '';
+          function escapeQueryString(value) {
+            return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+          }
+
+          async function findExistingId() {
+            const query = [
+              'MATCH (n:MCPServer) WHERE',
+              `n.package_identifier = "${escapeQueryString(pkg)}" OR`,
+              `n.name = "${escapeQueryString(serverName)}" OR`,
+              `n.server_name = "${escapeQueryString(serverName)}"`,
+              'RETURN n LIMIT 1',
+            ].join(' ');
+            const res = await fetch(`${kfdbUrl}/api/v1/query`, {
+              method: 'POST',
+              headers: {
+                ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ query }),
+            });
+            if (!res.ok) return '';
+            const data = await res.json();
+            const row = data.data?.[0] || data.results?.[0] || {};
+            const node = row.n?.Object || row.n || row.node?.Object || row.node || row;
+            return unwrap(node?._id) || unwrap(node?.id) || unwrap(row.id) || '';
+          }
+
+          const existingId = await findExistingId();
 
           const props = {
             name: { String: serverName },
@@ -251,7 +268,7 @@ jobs:
             let s=''; process.stdin.on('data', c => s += c); process.stdin.on('end', () => {
               try {
                 const j = JSON.parse(s);
-                console.log(j.results?.[0]?.id || j.operations?.[0]?.id || j.id || '');
+                console.log(j.affected_ids?.[0] || j.results?.[0]?.id || j.operations?.[0]?.id || j.id || '');
               } catch {
                 console.log('');
               }
