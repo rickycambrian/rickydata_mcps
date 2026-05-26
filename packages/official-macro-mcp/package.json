@@ -1,5 +1,5 @@
 {
-  "name": "@rickydata/official-macro-mcp",
+  "name": "rickydata-official-macro-mcp",
   "version": "0.1.0",
   "private": false,
   "description": "MCP server for official macro data from Treasury, BLS, FRED, BEA, and EIA",

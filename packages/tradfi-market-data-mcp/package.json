@@ -1,5 +1,5 @@
 {
-  "name": "@rickydata/tradfi-market-data-mcp",
+  "name": "rickydata-tradfi-market-data-mcp",
   "version": "0.1.0",
   "private": false,
   "description": "MCP server for traditional market prices and vendor-adapter status used by CFA capstone research",

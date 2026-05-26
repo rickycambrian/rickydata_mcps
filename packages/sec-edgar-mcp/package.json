@@ -1,5 +1,5 @@
 {
-  "name": "@rickydata/sec-edgar-mcp",
+  "name": "rickydata-sec-edgar-mcp",
   "version": "0.1.0",
   "private": false,
   "description": "MCP server for SEC EDGAR company lookup, filings, XBRL company facts, and CFA equity research packs",

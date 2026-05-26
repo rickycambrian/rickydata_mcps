@@ -1,5 +1,5 @@
 {
-  "name": "@rickydata/capstone-evidence-mcp",
+  "name": "rickydata-capstone-evidence-mcp",
   "version": "0.1.0",
   "private": false,
   "description": "MCP server for local capstone evidence artifacts, claim registers, and source bundles",

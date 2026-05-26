@@ -10,11 +10,11 @@ allowed-tools: Bash(npm:*), Bash(node:*)
 
 Validate the local MCP servers that support the Ricky CFA capstone research stack:
 
-- `@rickydata/sec-edgar-mcp`
-- `@rickydata/official-macro-mcp`
-- `@rickydata/tradfi-market-data-mcp`
-- `@rickydata/hyperliquid-tradfi-microstructure-mcp`
-- `@rickydata/capstone-evidence-mcp`
+- `rickydata-sec-edgar-mcp`
+- `rickydata-official-macro-mcp`
+- `rickydata-tradfi-market-data-mcp`
+- `rickydata-hyperliquid-tradfi-microstructure-mcp`
+- `rickydata-capstone-evidence-mcp`
 
 ## Verified
 
@@ -53,11 +53,11 @@ Observed result: install completed, adding the five new workspaces to `package-l
 Run package-local tests:
 
 ```bash
-npm run test --workspace @rickydata/sec-edgar-mcp
-npm run test --workspace @rickydata/official-macro-mcp
-npm run test --workspace @rickydata/tradfi-market-data-mcp
-npm run test --workspace @rickydata/hyperliquid-tradfi-microstructure-mcp
-npm run test --workspace @rickydata/capstone-evidence-mcp
+npm run test --workspace rickydata-sec-edgar-mcp
+npm run test --workspace rickydata-official-macro-mcp
+npm run test --workspace rickydata-tradfi-market-data-mcp
+npm run test --workspace rickydata-hyperliquid-tradfi-microstructure-mcp
+npm run test --workspace rickydata-capstone-evidence-mcp
 ```
 
 Observed result:
@@ -73,11 +73,11 @@ capstone-evidence-mcp: 3 passed
 Run TypeScript builds:
 
 ```bash
-npm run build --workspace @rickydata/sec-edgar-mcp
-npm run build --workspace @rickydata/official-macro-mcp
-npm run build --workspace @rickydata/tradfi-market-data-mcp
-npm run build --workspace @rickydata/hyperliquid-tradfi-microstructure-mcp
-npm run build --workspace @rickydata/capstone-evidence-mcp
+npm run build --workspace rickydata-sec-edgar-mcp
+npm run build --workspace rickydata-official-macro-mcp
+npm run build --workspace rickydata-tradfi-market-data-mcp
+npm run build --workspace rickydata-hyperliquid-tradfi-microstructure-mcp
+npm run build --workspace rickydata-capstone-evidence-mcp
 ```
 
 Observed result: all five package builds completed with `tsc`.
@@ -85,11 +85,11 @@ Observed result: all five package builds completed with `tsc`.
 Run live/local smoke checks:
 
 ```bash
-SEC_USER_AGENT='rickydata_mcps local research contact@rickydata.org' npm run smoke --workspace @rickydata/sec-edgar-mcp
-npm run smoke --workspace @rickydata/official-macro-mcp
-npm run smoke --workspace @rickydata/tradfi-market-data-mcp
-npm run smoke --workspace @rickydata/hyperliquid-tradfi-microstructure-mcp
-npm run smoke --workspace @rickydata/capstone-evidence-mcp
+SEC_USER_AGENT='rickydata_mcps local research contact@rickydata.org' npm run smoke --workspace rickydata-sec-edgar-mcp
+npm run smoke --workspace rickydata-official-macro-mcp
+npm run smoke --workspace rickydata-tradfi-market-data-mcp
+npm run smoke --workspace rickydata-hyperliquid-tradfi-microstructure-mcp
+npm run smoke --workspace rickydata-capstone-evidence-mcp
 ```
 
 Observed result:
@@ -166,11 +166,11 @@ Observed result: all five built stdio servers listed tools and returned a succes
 Check publish package contents:
 
 ```bash
-npm pack --dry-run --workspace @rickydata/sec-edgar-mcp
-npm pack --dry-run --workspace @rickydata/official-macro-mcp
-npm pack --dry-run --workspace @rickydata/tradfi-market-data-mcp
-npm pack --dry-run --workspace @rickydata/hyperliquid-tradfi-microstructure-mcp
-npm pack --dry-run --workspace @rickydata/capstone-evidence-mcp
+npm pack --dry-run --workspace rickydata-sec-edgar-mcp
+npm pack --dry-run --workspace rickydata-official-macro-mcp
+npm pack --dry-run --workspace rickydata-tradfi-market-data-mcp
+npm pack --dry-run --workspace rickydata-hyperliquid-tradfi-microstructure-mcp
+npm pack --dry-run --workspace rickydata-capstone-evidence-mcp
 ```
 
 Observed result: each tarball included `README.md`, `package.json`, and compiled `dist/**` files only after adding `files: ["dist", "README.md"]` to each package manifest.
@@ -188,23 +188,23 @@ Observed result: each tarball included `README.md`, `package.json`, and compiled
 ## Quick Reference
 
 ```bash
-npm run test --workspace @rickydata/sec-edgar-mcp
-npm run build --workspace @rickydata/sec-edgar-mcp
-SEC_USER_AGENT='rickydata_mcps local research contact@rickydata.org' npm run smoke --workspace @rickydata/sec-edgar-mcp
+npm run test --workspace rickydata-sec-edgar-mcp
+npm run build --workspace rickydata-sec-edgar-mcp
+SEC_USER_AGENT='rickydata_mcps local research contact@rickydata.org' npm run smoke --workspace rickydata-sec-edgar-mcp
 
-npm run test --workspace @rickydata/official-macro-mcp
-npm run build --workspace @rickydata/official-macro-mcp
-npm run smoke --workspace @rickydata/official-macro-mcp
+npm run test --workspace rickydata-official-macro-mcp
+npm run build --workspace rickydata-official-macro-mcp
+npm run smoke --workspace rickydata-official-macro-mcp
 
-npm run test --workspace @rickydata/tradfi-market-data-mcp
-npm run build --workspace @rickydata/tradfi-market-data-mcp
-npm run smoke --workspace @rickydata/tradfi-market-data-mcp
+npm run test --workspace rickydata-tradfi-market-data-mcp
+npm run build --workspace rickydata-tradfi-market-data-mcp
+npm run smoke --workspace rickydata-tradfi-market-data-mcp
 
-npm run test --workspace @rickydata/hyperliquid-tradfi-microstructure-mcp
-npm run build --workspace @rickydata/hyperliquid-tradfi-microstructure-mcp
-npm run smoke --workspace @rickydata/hyperliquid-tradfi-microstructure-mcp
+npm run test --workspace rickydata-hyperliquid-tradfi-microstructure-mcp
+npm run build --workspace rickydata-hyperliquid-tradfi-microstructure-mcp
+npm run smoke --workspace rickydata-hyperliquid-tradfi-microstructure-mcp
 
-npm run test --workspace @rickydata/capstone-evidence-mcp
-npm run build --workspace @rickydata/capstone-evidence-mcp
-npm run smoke --workspace @rickydata/capstone-evidence-mcp
+npm run test --workspace rickydata-capstone-evidence-mcp
+npm run build --workspace rickydata-capstone-evidence-mcp
+npm run smoke --workspace rickydata-capstone-evidence-mcp
 ```

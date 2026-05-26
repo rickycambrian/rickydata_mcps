@@ -1,5 +1,5 @@
 {
-  "name": "@rickydata/hyperliquid-tradfi-microstructure-mcp",
+  "name": "rickydata-hyperliquid-tradfi-microstructure-mcp",
   "version": "0.1.0",
   "private": false,
   "description": "MCP server for Hyperliquid HIP-3 traditional market taxonomy, local ClickHouse depth, slippage, and replay validation",

@@ -10,11 +10,11 @@ on:
         type: choice
         options:
           - all
-          - "@rickydata/sec-edgar-mcp"
-          - "@rickydata/official-macro-mcp"
-          - "@rickydata/tradfi-market-data-mcp"
-          - "@rickydata/hyperliquid-tradfi-microstructure-mcp"
-          - "@rickydata/capstone-evidence-mcp"
+          - "rickydata-sec-edgar-mcp"
+          - "rickydata-official-macro-mcp"
+          - "rickydata-tradfi-market-data-mcp"
+          - "rickydata-hyperliquid-tradfi-microstructure-mcp"
+          - "rickydata-capstone-evidence-mcp"
 
 concurrency:
   group: publish-cfa-capstone-mcps-${{ github.ref }}
@@ -30,27 +30,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - package_name: "@rickydata/sec-edgar-mcp"
+          - package_name: "rickydata-sec-edgar-mcp"
             package_dir: "sec-edgar-mcp"
             server_name: "sec-edgar-mcp"
             min_tools: 5
             secrets_optional: "[]"
-          - package_name: "@rickydata/official-macro-mcp"
+          - package_name: "rickydata-official-macro-mcp"
             package_dir: "official-macro-mcp"
             server_name: "official-macro-mcp"
             min_tools: 5
             secrets_optional: "[{\"name\":\"FRED_API_KEY\",\"description\":\"Optional FRED API key for macro_fred_series.\"},{\"name\":\"EIA_API_KEY\",\"description\":\"Optional EIA API key for macro_eia_petroleum_spot_price.\"}]"
-          - package_name: "@rickydata/tradfi-market-data-mcp"
+          - package_name: "rickydata-tradfi-market-data-mcp"
             package_dir: "tradfi-market-data-mcp"
             server_name: "tradfi-market-data-mcp"
             min_tools: 5
             secrets_optional: "[{\"name\":\"ALPHAVANTAGE_API_KEY\",\"description\":\"Optional Alpha Vantage key for prices and company overview.\"},{\"name\":\"FMP_API_KEY\",\"description\":\"Optional Financial Modeling Prep key for profiles and prices.\"},{\"name\":\"POLYGON_API_KEY\",\"description\":\"Reserved for the production-grade Polygon adapter.\"}]"
-          - package_name: "@rickydata/hyperliquid-tradfi-microstructure-mcp"
+          - package_name: "rickydata-hyperliquid-tradfi-microstructure-mcp"
             package_dir: "hyperliquid-tradfi-microstructure-mcp"
             server_name: "hyperliquid-tradfi-microstructure-mcp"
             min_tools: 6
             secrets_optional: "[{\"name\":\"HL_CLICKHOUSE_CONTAINER\",\"description\":\"Optional local ClickHouse Docker container name for development; live API fallback works without it.\"}]"
-          - package_name: "@rickydata/capstone-evidence-mcp"
+          - package_name: "rickydata-capstone-evidence-mcp"
             package_dir: "capstone-evidence-mcp"
             server_name: "capstone-evidence-mcp"
             min_tools: 5
