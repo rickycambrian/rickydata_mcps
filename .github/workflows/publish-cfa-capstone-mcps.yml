@@ -250,7 +250,7 @@ jobs:
           };
 
           const op = existingId
-            ? { operation: 'update_node', id: existingId, properties: props }
+            ? { operation: 'update_node', label: 'MCPServer', id: existingId, properties: props }
             : { operation: 'create_node', label: 'MCPServer', properties: props };
           fs.writeFileSync('/tmp/kfdb-payload.json', JSON.stringify({ operations: [op] }));
           fs.writeFileSync('/tmp/existing-id.txt', existingId);
