@@ -193,7 +193,7 @@ jobs:
               `n.package_identifier = "${escapeQueryString(pkg)}" OR`,
               `n.name = "${escapeQueryString(serverName)}" OR`,
               `n.server_name = "${escapeQueryString(serverName)}"`,
-              'RETURN n LIMIT 1',
+              'RETURN n LIMIT 10',
             ].join(' ');
             const res = await fetch(`${kfdbUrl}/api/v1/query`, {
               method: 'POST',
@@ -205,9 +205,13 @@ jobs:
             });
             if (!res.ok) return '';
             const data = await res.json();
-            const row = data.data?.[0] || data.results?.[0] || {};
-            const node = row.n?.Object || row.n || row.node?.Object || row.node || row;
-            return unwrap(node?._id) || unwrap(node?.id) || unwrap(row.id) || '';
+            const rows = data.data || data.results || [];
+            const nodes = rows.map((row) => row.n?.Object || row.n || row.node?.Object || row.node || row);
+            const node = nodes.find((candidate) => {
+              const hidden = unwrap(candidate?.admin_hidden);
+              return hidden !== true && hidden !== 'true';
+            }) || nodes[0] || {};
+            return unwrap(node?._id) || unwrap(node?.id) || '';
           }
 
           const existingId = await findExistingId();
