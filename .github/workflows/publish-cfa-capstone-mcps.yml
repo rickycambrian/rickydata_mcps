@@ -167,6 +167,13 @@ jobs:
           const sourceRepository = process.env.SOURCE_REPOSITORY;
           const sourceCommit = process.env.SOURCE_COMMIT;
           const packageSubdir = `packages/${packageDir}`;
+          const canonicalIds = {
+            'rickydata-sec-edgar-mcp': '94234b89-edfa-4c8f-b3e0-f4ebd063c27d',
+            'rickydata-official-macro-mcp': 'ff94bc15-8a74-4dd9-aa98-e504b7a30a62',
+            'rickydata-tradfi-market-data-mcp': '7b92e311-cab7-47fd-a3b2-1ec66982057a',
+            'rickydata-hyperliquid-tradfi-microstructure-mcp': 'f306e47c-37f1-46c7-95db-432168e53ed9',
+            'rickydata-capstone-evidence-mcp': '6ee3927d-8642-4063-b3f6-97d550a3d116',
+          };
           const installCommand = registryType === 'npm'
             ? `npx -y ${pkg}@${version}`
             : `git clone ${sourceRepository} && cd rickydata_mcps/${packageSubdir} && npm install && npm run build`;
@@ -174,44 +181,18 @@ jobs:
             ? `npx -y ${pkg}@${version}`
             : 'npm start';
 
-          function unwrap(value) {
-            if (value && typeof value === 'object') {
-              if ('String' in value) return value.String;
-              if ('Integer' in value) return value.Integer;
-              if ('Boolean' in value) return value.Boolean;
-            }
-            return value;
-          }
-
-          function escapeQueryString(value) {
-            return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"');
-          }
-
           async function findExistingId() {
-            const query = [
-              'MATCH (n:MCPServer) WHERE',
-              `n.package_identifier = "${escapeQueryString(pkg)}" OR`,
-              `n.name = "${escapeQueryString(serverName)}" OR`,
-              `n.server_name = "${escapeQueryString(serverName)}"`,
-              'RETURN n LIMIT 10',
-            ].join(' ');
-            const res = await fetch(`${kfdbUrl}/api/v1/query`, {
-              method: 'POST',
+            const canonicalId = canonicalIds[pkg] || '';
+            if (!canonicalId) return '';
+            const res = await fetch(`${kfdbUrl}/api/v1/entities/MCPServer/${canonicalId}`, {
               headers: {
                 ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-                'Content-Type': 'application/json',
               },
-              body: JSON.stringify({ query }),
             });
             if (!res.ok) return '';
             const data = await res.json();
-            const rows = data.data || data.results || [];
-            const nodes = rows.map((row) => row.n?.Object || row.n || row.node?.Object || row.node || row);
-            const node = nodes.find((candidate) => {
-              const hidden = unwrap(candidate?.admin_hidden);
-              return hidden !== true && hidden !== 'true';
-            }) || nodes[0] || {};
-            return unwrap(node?._id) || unwrap(node?.id) || '';
+            if (data?.id === canonicalId || data?.properties) return canonicalId;
+            return '';
           }
 
           const existingId = await findExistingId();
@@ -246,6 +227,7 @@ jobs:
             secrets_optional: { String: JSON.stringify(secretsOptional) },
             external_services: { String: JSON.stringify(externalServices) },
             categories: { String: JSON.stringify(['Finance', 'Research', 'CFA', 'Capstone']) },
+            admin_hidden: { Boolean: false },
             source_repository: { String: sourceRepository },
             repository_url: { String: sourceRepository },
             repository_subfolder: { String: packageSubdir },
