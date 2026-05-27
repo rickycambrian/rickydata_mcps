@@ -35,26 +35,31 @@ jobs:
             server_name: "sec-edgar-mcp"
             min_tools: 5
             secrets_optional: "[]"
+            external_services: "[\"sec\"]"
           - package_name: "rickydata-official-macro-mcp"
             package_dir: "official-macro-mcp"
             server_name: "official-macro-mcp"
             min_tools: 5
             secrets_optional: "[{\"name\":\"FRED_API_KEY\",\"description\":\"Optional FRED API key for macro_fred_series.\"},{\"name\":\"EIA_API_KEY\",\"description\":\"Optional EIA API key for macro_eia_petroleum_spot_price.\"}]"
+            external_services: "[\"treasury\",\"bls\",\"fred\",\"eia\"]"
           - package_name: "rickydata-tradfi-market-data-mcp"
             package_dir: "tradfi-market-data-mcp"
             server_name: "tradfi-market-data-mcp"
             min_tools: 5
             secrets_optional: "[{\"name\":\"ALPHAVANTAGE_API_KEY\",\"description\":\"Optional Alpha Vantage key for prices and company overview.\"},{\"name\":\"FMP_API_KEY\",\"description\":\"Optional Financial Modeling Prep key for profiles and prices.\"},{\"name\":\"POLYGON_API_KEY\",\"description\":\"Reserved for the production-grade Polygon adapter.\"}]"
+            external_services: "[\"nasdaq\",\"alphavantage\",\"fmp\",\"polygonio\"]"
           - package_name: "rickydata-hyperliquid-tradfi-microstructure-mcp"
             package_dir: "hyperliquid-tradfi-microstructure-mcp"
             server_name: "hyperliquid-tradfi-microstructure-mcp"
             min_tools: 6
             secrets_optional: "[{\"name\":\"HL_CLICKHOUSE_CONTAINER\",\"description\":\"Optional local ClickHouse Docker container name for development; live API fallback works without it.\"}]"
+            external_services: "[\"hyperliquid\"]"
           - package_name: "rickydata-capstone-evidence-mcp"
             package_dir: "capstone-evidence-mcp"
             server_name: "capstone-evidence-mcp"
             min_tools: 5
             secrets_optional: "[{\"name\":\"CAPSTONE_EVIDENCE_DIR\",\"description\":\"Optional local evidence artifact directory.\"}]"
+            external_services: "[]"
 
     steps:
       - name: Skip non-selected package
@@ -141,6 +146,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           TOOLS_COUNT: ${{ steps.tools.outputs.count }}
           SECRETS_OPTIONAL: ${{ matrix.secrets_optional }}
+          EXTERNAL_SERVICES: ${{ matrix.external_services }}
           REGISTRY_TYPE: ${{ steps.publish.outputs.registry }}
           SOURCE_REPOSITORY: https://github.com/rickycambrian/rickydata_mcps
           SOURCE_COMMIT: ${{ github.sha }}
@@ -156,6 +162,7 @@ jobs:
           const packageDir = process.env.PACKAGE_DIR;
           const tools = JSON.parse(fs.readFileSync('/tmp/tools_available.json', 'utf8'));
           const secretsOptional = JSON.parse(process.env.SECRETS_OPTIONAL || '[]');
+          const externalServices = JSON.parse(process.env.EXTERNAL_SERVICES || '[]');
           const registryType = process.env.REGISTRY_TYPE || 'git';
           const sourceRepository = process.env.SOURCE_REPOSITORY;
           const sourceCommit = process.env.SOURCE_COMMIT;
@@ -233,6 +240,7 @@ jobs:
             secrets_required: { String: JSON.stringify([]) },
             required_credentials: { String: JSON.stringify([]) },
             secrets_optional: { String: JSON.stringify(secretsOptional) },
+            external_services: { String: JSON.stringify(externalServices) },
             categories: { String: JSON.stringify(['Finance', 'Research', 'CFA', 'Capstone']) },
             source_repository: { String: sourceRepository },
             repository_url: { String: sourceRepository },
