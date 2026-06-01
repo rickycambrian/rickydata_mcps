@@ -32,11 +32,12 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install rickygit-mcp dependencies
-        # Scope install to this one workspace so unrelated sibling packages
-        # (with their own pinned dev deps) cannot break resolution. Keep the
-        # committed root lockfile; do not delete it.
-        run: npm install --no-audit --no-fund --workspace rickydata-rickygit-mcp
+      - name: Install dependencies
+        # Deterministic install from the committed root lockfile. `npm ci`
+        # installs platform-specific optional deps (e.g. the rollup native
+        # binary vitest needs) that a scoped `npm install --workspace` skips,
+        # and does not mutate the lockfile.
+        run: npm ci --no-audit --no-fund
 
       - name: Build
         run: npm run build --workspace rickydata-rickygit-mcp
