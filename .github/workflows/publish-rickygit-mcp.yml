@@ -33,11 +33,18 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
-        # Deterministic install from the committed root lockfile. `npm ci`
-        # installs platform-specific optional deps (e.g. the rollup native
-        # binary vitest needs) that a scoped `npm install --workspace` skips,
-        # and does not mutate the lockfile.
+        # Deterministic install from the committed root lockfile.
         run: npm ci --no-audit --no-fund
+
+      - name: Ensure Linux rollup binary (npm optional-deps bug workaround)
+        # The lockfile was generated on macOS, so it lacks a package record for
+        # the linux rollup native binary that vitest/rollup needs at runtime
+        # (npm/cli#4828). Install the platform-matched binary explicitly, pinned
+        # to the resolved rollup version, without touching the lockfile.
+        run: |
+          ROLLUP_VERSION=$(node -p "require('rollup/package.json').version")
+          npm install --no-save --no-audit --no-fund \
+            "@rollup/rollup-linux-x64-gnu@${ROLLUP_VERSION}"
 
       - name: Build
         run: npm run build --workspace rickydata-rickygit-mcp
