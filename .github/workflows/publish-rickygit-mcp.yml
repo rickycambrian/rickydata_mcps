@@ -32,10 +32,11 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install workspace dependencies
-        run: |
-          rm -f package-lock.json
-          npm install --no-audit --no-fund
+      - name: Install rickygit-mcp dependencies
+        # Scope install to this one workspace so unrelated sibling packages
+        # (with their own pinned dev deps) cannot break resolution. Keep the
+        # committed root lockfile; do not delete it.
+        run: npm install --no-audit --no-fund --workspace rickydata-rickygit-mcp
 
       - name: Build
         run: npm run build --workspace rickydata-rickygit-mcp
