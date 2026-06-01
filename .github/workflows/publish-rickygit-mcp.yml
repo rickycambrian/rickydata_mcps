@@ -47,10 +47,10 @@ jobs:
             "@rollup/rollup-linux-x64-gnu@${ROLLUP_VERSION}"
 
       - name: Build
-        run: npm run build --workspace rickydata-rickygit-mcp
+        run: npm run build --workspace @rickydata/rickygit-mcp
 
       - name: Test
-        run: npm run test --workspace rickydata-rickygit-mcp
+        run: npm run test --workspace @rickydata/rickygit-mcp
 
       - name: Verify tool count (stdio tools/list)
         id: tools
@@ -69,7 +69,7 @@ jobs:
 
       - name: Bump patch version
         if: inputs.skip_version_bump != 'true'
-        run: npm version patch --no-git-tag-version --workspace rickydata-rickygit-mcp
+        run: npm version patch --no-git-tag-version --workspace @rickydata/rickygit-mcp
 
       - name: Capture version
         id: ver
@@ -80,9 +80,9 @@ jobs:
       - name: Skip if already published
         id: check
         run: |
-          if npm view "rickydata-rickygit-mcp@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
+          if npm view "@rickydata/rickygit-mcp@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::rickydata-rickygit-mcp@${{ steps.ver.outputs.version }} already on npm; skipping publish"
+            echo "::notice::@rickydata/rickygit-mcp@${{ steps.ver.outputs.version }} already on npm; skipping publish"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
@@ -90,7 +90,7 @@ jobs:
       - name: Publish to npm
         id: publish
         if: steps.check.outputs.exists == 'false'
-        run: npm publish --workspace rickydata-rickygit-mcp --access public --provenance
+        run: npm publish --workspace @rickydata/rickygit-mcp --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

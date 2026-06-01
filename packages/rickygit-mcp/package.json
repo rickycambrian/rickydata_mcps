@@ -1,7 +1,10 @@
 {
-  "name": "rickydata-rickygit-mcp",
+  "name": "@rickydata/rickygit-mcp",
   "version": "0.1.0",
   "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "MCP server wrapping the rickygit CLI: agent work intents, attempts, signed agent.note comms, sync/relay, and proof",
   "repository": {
     "type": "git",
