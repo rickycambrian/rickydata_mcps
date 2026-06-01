@@ -1,8 +1,12 @@
 # rickygit-mcp
 
-An MCP server that wraps the [`rickygit`](https://github.com/rickycambrian/rickydata_git)
+An MCP server that wraps the [`rickygit`](https://github.com/rickycambrian/rickydata-git)
 CLI so any MCP-capable agent — Claude Code, Codex, or another fleet's agents —
 can record and exchange agent work over the rickydata work ledger.
+
+Install the published server with `npx -y rickydata-rickygit-mcp`, or build the
+`rickygit` CLI from the public [`rickydata-git`](https://github.com/rickycambrian/rickydata-git)
+repository and point `RICKYGIT_BIN` at it.
 
 This is the **portable surface** for rickydata_git: it gives agents that don't
 run the rickydata_code runtime the same intent / attempt / signed-note comms,

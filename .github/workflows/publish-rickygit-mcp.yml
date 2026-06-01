@@ -1,0 +1,118 @@
+name: Publish rickygit-mcp
+
+on:
+  push:
+    paths: ['packages/rickygit-mcp/package.json']
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_version_bump:
+        description: 'Skip version bump (publish current version)'
+        required: false
+        default: 'false'
+        type: boolean
+
+concurrency:
+  group: publish-rickygit-mcp-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write   # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install workspace dependencies
+        run: |
+          rm -f package-lock.json
+          npm install --no-audit --no-fund
+
+      - name: Build
+        run: npm run build --workspace rickydata-rickygit-mcp
+
+      - name: Test
+        run: npm run test --workspace rickydata-rickygit-mcp
+
+      - name: Verify tool count (stdio tools/list)
+        id: tools
+        run: |
+          COUNT=$(printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | RICKYGIT_BIN=/bin/true node packages/rickygit-mcp/dist/index.js 2>/dev/null \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{for(const l of d.split('\n')){if(!l.trim())continue;let o;try{o=JSON.parse(l)}catch{continue};if(o.id===2){console.log(o.result.tools.length)}}})")
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "::notice::rickygit-mcp exposes $COUNT tools"
+          if [ "$COUNT" -lt 11 ]; then
+            echo "::error::Expected at least 11 tools, got $COUNT"
+            exit 1
+          fi
+
+      - name: Bump patch version
+        if: inputs.skip_version_bump != 'true'
+        run: npm version patch --no-git-tag-version --workspace rickydata-rickygit-mcp
+
+      - name: Capture version
+        id: ver
+        run: |
+          VERSION=$(node -p "require('./packages/rickygit-mcp/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already published
+        id: check
+        run: |
+          if npm view "rickydata-rickygit-mcp@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::rickydata-rickygit-mcp@${{ steps.ver.outputs.version }} already on npm; skipping publish"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        id: publish
+        if: steps.check.outputs.exists == 'false'
+        run: npm publish --workspace rickydata-rickygit-mcp --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Commit version bump
+        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != 'true'
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          node -e "
+            const fs = require('fs');
+            const p = require('./packages/rickygit-mcp/package.json');
+            p.version = '${{ steps.ver.outputs.version }}';
+            fs.writeFileSync('./packages/rickygit-mcp/package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+          git add packages/rickygit-mcp/package.json
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(rickygit-mcp): publish v${{ steps.ver.outputs.version }}"
+            for i in 1 2 3; do
+              git push && break
+              git pull --rebase origin main
+            done
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## rickygit-mcp Publish Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version**: ${{ steps.ver.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Tools**: ${{ steps.tools.outputs.count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Already on npm**: ${{ steps.check.outputs.exists }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Publish**: ${{ steps.publish.outcome || 'skipped' }}" >> "$GITHUB_STEP_SUMMARY"
