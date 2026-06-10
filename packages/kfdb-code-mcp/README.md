@@ -10,18 +10,28 @@ agentic coding effectiveness without leaking benchmark solutions.
 
 ## Tools
 
-| Tool | Endpoint | Bench mode |
-|---|---|---|
-| `search_code` | `POST /api/v1/code-search` | ✅ |
-| `find_symbol` | `POST /api/v1/code-search` (symbol stream) | ✅ |
-| `get_callers` | `POST /api/v1/graph/ego` (incoming `CALLS`) | ✅ |
-| `get_callees` | `POST /api/v1/graph/ego` (outgoing `CALLS`) | ✅ |
-| `get_context_bundle` | `POST /api/v1/agent/context` | ✅ |
-| `list_repos` | `GET /api/v1/entities/Repository` | ❌ (not registered) |
-| `repo_overview` | `POST /api/v1/agent/context` | ❌ (not registered) |
+| Tool | Endpoint | Bench mode | Needs API key |
+|---|---|---|---|
+| `search_code` | `POST /api/v1/code-search` | ✅ | — |
+| `find_symbol` | `POST /api/v1/code-search` (symbol stream) | ✅ | — |
+| `get_callers` | `POST /api/v1/graph/ego` (incoming `CALLS`) | ✅ | ✅ |
+| `get_callees` | `POST /api/v1/graph/ego` (outgoing `CALLS`) | ✅ | ✅ |
+| `get_context_bundle` | `POST /api/v1/agent/context` | ✅ | — |
+| `list_repos` | `GET /api/v1/entities/Repository` | ❌ (not registered) | ✅ |
+| `repo_overview` | `POST /api/v1/agent/context` | ❌ (not registered) | — |
 
 Snippets are capped (~400 chars) — agents are expected to already have the repo
 checked out locally; these tools locate and rank, they do not deliver files.
+
+**API-key gating**: `get_callers`/`get_callees` hit the tenant-authenticated
+ego-graph endpoint and only work with `KFDB_API_KEY`. When no key is configured,
+those two tools are **omitted from `tools/list` entirely** (not registered) so an
+agent is never offered a tool that can only error. Tool counts:
+
+| Mode | With `KFDB_API_KEY` | Without |
+|---|---|---|
+| Full | 7 | 5 |
+| Bench (`KFDB_BENCH_REPO_SCOPE` set) | 5 | 3 |
 
 ## Configuration
 

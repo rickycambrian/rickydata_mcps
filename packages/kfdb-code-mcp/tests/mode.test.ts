@@ -84,13 +84,16 @@ const SCOPED = [
   "get_context_bundle",
 ];
 
-const BENCH_ENV = {
-  KFDB_BENCH_REPO_SCOPE: "11111111-1111-1111-1111-111111111111",
-};
+const DUMMY_KEY = "ci-dummy"; // unused by tools/list + pre-network guards
+const BENCH = "11111111-1111-1111-1111-111111111111";
+// Bench mode WITH a key → 5 scoped tools (ego tools active).
+const BENCH_ENV = { KFDB_BENCH_REPO_SCOPE: BENCH, KFDB_API_KEY: DUMMY_KEY };
+// Bench mode WITHOUT a key → 3 public scoped tools (the pilot config).
+const BENCH_ENV_NOKEY = { KFDB_BENCH_REPO_SCOPE: BENCH, KFDB_API_KEY: "" };
 
-describe("tools/list by mode", () => {
-  it("full mode exposes all 7 tools incl. discovery tools", () => {
-    const names = listTools({ KFDB_BENCH_REPO_SCOPE: "" });
+describe("tools/list by mode + API-key gating", () => {
+  it("full mode + key exposes all 7 tools incl. discovery tools", () => {
+    const names = listTools({ KFDB_BENCH_REPO_SCOPE: "", KFDB_API_KEY: DUMMY_KEY });
     expect(names.length).toBe(7);
     for (const s of SCOPED) expect(names).toContain(s);
     expect(names).toContain("list_repos");
@@ -98,13 +101,28 @@ describe("tools/list by mode", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("bench mode exposes ONLY the 5 scoped tools (no list_repos / repo_overview)", () => {
-    const names = listTools({
-      KFDB_BENCH_REPO_SCOPE: "11111111-1111-1111-1111-111111111111",
-    });
+  it("full mode WITHOUT key omits the 2 call-graph tools (5 tools)", () => {
+    const names = listTools({ KFDB_BENCH_REPO_SCOPE: "", KFDB_API_KEY: "" });
+    expect(names.length).toBe(5);
+    expect(names).not.toContain("get_callers");
+    expect(names).not.toContain("get_callees");
+    expect(names).toContain("list_repos");
+  });
+
+  it("bench mode + key exposes the 5 scoped tools (no list_repos / repo_overview)", () => {
+    const names = listTools(BENCH_ENV);
     expect(names.sort()).toEqual([...SCOPED].sort());
     expect(names).not.toContain("list_repos");
     expect(names).not.toContain("repo_overview");
+  });
+
+  it("bench mode WITHOUT key exposes ONLY the 3 public tools (pilot config)", () => {
+    const names = listTools(BENCH_ENV_NOKEY);
+    expect(names.sort()).toEqual(
+      ["search_code", "find_symbol", "get_context_bundle"].sort(),
+    );
+    expect(names).not.toContain("get_callers");
+    expect(names).not.toContain("get_callees");
   });
 });
 
@@ -133,5 +151,12 @@ describe("bench-mode guards (pre-network, red-team vectors)", () => {
       node_id: { malicious: true },
     });
     expect(out).toMatch(/must be a string/i);
+  });
+
+  it("rejects a call-graph tool when no API key is configured", () => {
+    const out = callTool(BENCH_ENV_NOKEY, "get_callers", {
+      node_id: "00000000-dead-beef-0000-000000000000",
+    });
+    expect(out).toMatch(/requires a KFDB API key/i);
   });
 });

@@ -8,6 +8,15 @@ export const KFDB_API_URL =
 export const KFDB_API_KEY = process.env.KFDB_API_KEY || "";
 
 /**
+ * Whether an API key is configured. The call-graph tools (get_callers /
+ * get_callees) hit the tenant-authenticated /api/v1/graph/ego endpoint and only
+ * work with a key. When absent we omit them from tools/list entirely so an agent
+ * is never offered a tool that can only error — keeps the bench treatment arm's
+ * tool-usage signal clean.
+ */
+export const HAS_API_KEY = KFDB_API_KEY.length > 0;
+
+/**
  * Bench mode scope. When set, the server runs in hardened bench mode:
  *  - only the five scoped code-navigation tools are registered
  *  - every upstream call is forced to repo_scope=[BENCH_REPO_SCOPE] + strict_scope=true

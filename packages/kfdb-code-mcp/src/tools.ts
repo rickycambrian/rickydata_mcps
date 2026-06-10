@@ -12,7 +12,7 @@ import {
 } from "./kfdb.js";
 import { sanitizeGoldFields } from "./sanitize.js";
 import { rememberNodeIds, isNodeIdAllowed } from "./session.js";
-import { IS_BENCH_MODE, SNIPPET_MAX_LENGTH } from "./config.js";
+import { IS_BENCH_MODE, HAS_API_KEY, SNIPPET_MAX_LENGTH } from "./config.js";
 
 // The five tools available under bench mode (read-only code navigation only).
 export const SCOPED_TOOL_NAMES = [
@@ -22,6 +22,22 @@ export const SCOPED_TOOL_NAMES = [
   "get_callees",
   "get_context_bundle",
 ] as const;
+
+// The two call-graph tools require a KFDB API key (tenant-authenticated
+// /api/v1/graph/ego). When no key is configured they are omitted so an agent is
+// never offered a tool that can only error.
+const KEY_REQUIRED_TOOL_NAMES = new Set<string>(["get_callers", "get_callees"]);
+
+/** Tool names runnable in the current process given mode + key presence. */
+export function activeToolNames(): Set<string> {
+  const base = IS_BENCH_MODE
+    ? new Set<string>(SCOPED_TOOL_NAMES)
+    : new Set<string>(TOOL_DEFS.map((t) => t.name));
+  if (!HAS_API_KEY) {
+    for (const n of KEY_REQUIRED_TOOL_NAMES) base.delete(n);
+  }
+  return base;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -181,13 +197,13 @@ const TOOL_DEFS: Tool[] = [
 // Tool list (filtered by mode)
 // ---------------------------------------------------------------------------
 
-/** The tools to expose given the current mode. Bench mode → only scoped 5. */
+/**
+ * The tools to expose given the current mode + key presence.
+ * Bench mode → scoped tools only; no API key → omit get_callers/get_callees.
+ */
 export function buildToolList(): Tool[] {
-  if (IS_BENCH_MODE) {
-    const allowed = new Set<string>(SCOPED_TOOL_NAMES);
-    return TOOL_DEFS.filter((t) => allowed.has(t.name));
-  }
-  return TOOL_DEFS;
+  const allowed = activeToolNames();
+  return TOOL_DEFS.filter((t) => allowed.has(t.name));
 }
 
 // ---------------------------------------------------------------------------
@@ -310,10 +326,19 @@ export async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  // Hard gate: in bench mode, only scoped tools may execute, even if a client
-  // somehow asks for a discovery tool that was filtered from tools/list.
-  if (IS_BENCH_MODE && !SCOPED_TOOL_NAMES.includes(name as (typeof SCOPED_TOOL_NAMES)[number])) {
-    return { error: `tool "${name}" is not available in bench mode` };
+  // Hard gate: only currently-active tools may execute, even if a client asks
+  // for one that was filtered from tools/list (discovery tool in bench mode, or
+  // a key-required call-graph tool when no API key is configured).
+  if (!activeToolNames().has(name)) {
+    if (IS_BENCH_MODE && !SCOPED_TOOL_NAMES.includes(name as (typeof SCOPED_TOOL_NAMES)[number])) {
+      return { error: `tool "${name}" is not available in bench mode` };
+    }
+    if (KEY_REQUIRED_TOOL_NAMES.has(name)) {
+      return {
+        error: `tool "${name}" requires a KFDB API key (set KFDB_API_KEY); it is not available in this session`,
+      };
+    }
+    return { error: `tool "${name}" is not available in this session` };
   }
 
   let result: unknown;
