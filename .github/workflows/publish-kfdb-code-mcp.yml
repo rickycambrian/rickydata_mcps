@@ -1,0 +1,140 @@
+name: Publish kfdb-code-mcp
+
+on:
+  push:
+    paths: ['packages/kfdb-code-mcp/package.json']
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_version_bump:
+        description: 'Skip version bump (publish current version)'
+        required: false
+        default: 'false'
+        type: boolean
+
+concurrency:
+  group: publish-kfdb-code-mcp-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write   # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        # Deterministic install from the committed root lockfile.
+        run: npm ci --no-audit --no-fund
+
+      - name: Ensure Linux rollup binary (npm optional-deps bug workaround)
+        # The lockfile was generated on macOS, so it lacks a package record for
+        # the linux rollup native binary that vitest/rollup needs at runtime
+        # (npm/cli#4828). Install the platform-matched binary explicitly, pinned
+        # to the resolved rollup version, without touching the lockfile.
+        run: |
+          ROLLUP_VERSION=$(node -p "require('rollup/package.json').version")
+          npm install --no-save --no-audit --no-fund \
+            "@rollup/rollup-linux-x64-gnu@${ROLLUP_VERSION}"
+
+      - name: Build
+        run: npm run build --workspace @rickydata/kfdb-code-mcp
+
+      - name: Test
+        run: npm run test --workspace @rickydata/kfdb-code-mcp
+
+      - name: Verify tool count (full mode, stdio tools/list)
+        id: tools
+        run: |
+          COUNT=$(printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | node packages/kfdb-code-mcp/dist/index.js 2>/dev/null \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{for(const l of d.split('\n')){if(!l.trim())continue;let o;try{o=JSON.parse(l)}catch{continue};if(o.id===2){console.log(o.result.tools.length)}}})")
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "::notice::kfdb-code-mcp exposes $COUNT tools (full mode)"
+          if [ "$COUNT" -lt 7 ]; then
+            echo "::error::Expected at least 7 tools in full mode, got $COUNT"
+            exit 1
+          fi
+
+      - name: Verify bench-mode tool count (exactly 5 scoped tools)
+        run: |
+          COUNT=$(printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | KFDB_BENCH_REPO_SCOPE=11111111-1111-1111-1111-111111111111 node packages/kfdb-code-mcp/dist/index.js 2>/dev/null \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{for(const l of d.split('\n')){if(!l.trim())continue;let o;try{o=JSON.parse(l)}catch{continue};if(o.id===2){console.log(o.result.tools.length)}}})")
+          echo "::notice::kfdb-code-mcp exposes $COUNT tools (bench mode)"
+          if [ "$COUNT" -ne 5 ]; then
+            echo "::error::Expected exactly 5 scoped tools in bench mode, got $COUNT"
+            exit 1
+          fi
+
+      - name: Bump patch version
+        if: inputs.skip_version_bump != 'true'
+        run: npm version patch --no-git-tag-version --workspace @rickydata/kfdb-code-mcp
+
+      - name: Capture version
+        id: ver
+        run: |
+          VERSION=$(node -p "require('./packages/kfdb-code-mcp/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already published
+        id: check
+        run: |
+          if npm view "@rickydata/kfdb-code-mcp@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::@rickydata/kfdb-code-mcp@${{ steps.ver.outputs.version }} already on npm; skipping publish"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        id: publish
+        if: steps.check.outputs.exists == 'false'
+        run: npm publish --workspace @rickydata/kfdb-code-mcp --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Commit version bump
+        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != 'true'
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          node -e "
+            const fs = require('fs');
+            const p = require('./packages/kfdb-code-mcp/package.json');
+            p.version = '${{ steps.ver.outputs.version }}';
+            fs.writeFileSync('./packages/kfdb-code-mcp/package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+          git add packages/kfdb-code-mcp/package.json
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(kfdb-code-mcp): publish v${{ steps.ver.outputs.version }}"
+            for i in 1 2 3; do
+              git push && break
+              git pull --rebase origin main
+            done
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## kfdb-code-mcp Publish Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version**: ${{ steps.ver.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Tools (full)**: ${{ steps.tools.outputs.count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Already on npm**: ${{ steps.check.outputs.exists }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Publish**: ${{ steps.publish.outcome || 'skipped' }}" >> "$GITHUB_STEP_SUMMARY"
