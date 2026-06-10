@@ -103,9 +103,14 @@ jobs:
       - name: Publish to npm
         id: publish
         if: steps.check.outputs.exists == 'false'
-        run: npm publish --workspace @rickydata/kfdb-code-mcp --access public --provenance
+        # Publish from inside the package dir (NOT `npm publish --workspace`,
+        # which 404s on first publish of a new scoped package). Mirrors the
+        # working agent0-mcp / siyuan-mcp publish workflows.
+        working-directory: packages/kfdb-code-mcp
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
 
       - name: Commit version bump
         if: steps.publish.outcome == 'success' && inputs.skip_version_bump != 'true'
