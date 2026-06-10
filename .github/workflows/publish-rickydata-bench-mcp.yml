@@ -94,6 +94,48 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
 
+      - name: Update KFDB MCPServer entity (version + tools_available)
+        if: steps.publish.outcome == 'success'
+        # Deterministic MCPServer id = uuidv5(DNS, "@rickydata/rickydata-bench-mcp").
+        run: |
+          ( printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' ; sleep 2 ) \
+            | node packages/rickydata-bench-mcp/dist/index.js 2>/dev/null \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{for(const l of d.split('\n')){if(!l.trim())continue;let o;try{o=JSON.parse(l)}catch{continue};if(o.id===2)require('fs').writeFileSync('/tmp/tools_available.json',JSON.stringify(o.result.tools))}})"
+          node -e "
+            const fs=require('fs');
+            const tools=JSON.parse(fs.readFileSync('/tmp/tools_available.json','utf8'));
+            const v='${{ steps.ver.outputs.version }}';
+            const payload={operations:[{operation:'update_node',id:'91e0a102-46fc-5adf-8891-26ee51267a87',label:'MCPServer',properties:{
+              version:{String:v}, latest_version:{String:v}, tools_count:{Integer:tools.length},
+              tools_available:{String:JSON.stringify(tools)},
+              install_command:{String:'npx -y @rickydata/rickydata-bench-mcp@'+v},
+              run_command:{String:'npx -y @rickydata/rickydata-bench-mcp@'+v},
+              enriched_at:{String:new Date().toISOString()}, enrichment_version:{Integer:5},
+            }}]};
+            fs.writeFileSync('/tmp/bench-payload.json', JSON.stringify(payload));
+            console.log('KFDB payload: '+tools.length+' tools, v'+v);
+          "
+          curl -sf -X POST "${{ vars.KFDB_URL || 'http://34.60.37.158' }}/api/v1/write" \
+            -H "Authorization: Bearer ${{ secrets.KFDB_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/bench-payload.json \
+            && echo "::notice::KFDB MCPServer entity updated" \
+            || echo "::warning::KFDB entity update failed (non-blocking; gateway picks up on next sync)"
+
+      - name: Sync server in MCP gateway (instant single-entity refresh)
+        if: steps.publish.outcome == 'success'
+        run: |
+          MCP_GW="${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}"
+          RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/health/reload/91e0a102-46fc-5adf-8891-26ee51267a87" \
+            -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
+            -H "Content-Type: application/json" || echo '{"error":"sync failed"}')
+          echo "Gateway sync: $RESPONSE"
+          echo "$RESPONSE" | grep -q '"updated"' \
+            && echo "::notice::MCP gateway synced rickydata-bench-mcp v${{ steps.ver.outputs.version }}" \
+            || echo "::warning::gateway single-server sync failed (will pick up on next 10-min cycle)"
+
       - name: Commit version bump
         if: steps.publish.outcome == 'success' && inputs.skip_version_bump != 'true'
         run: |
