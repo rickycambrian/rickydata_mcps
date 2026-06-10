@@ -86,10 +86,18 @@ const SCOPED = [
 
 const DUMMY_KEY = "ci-dummy"; // unused by tools/list + pre-network guards
 const BENCH = "11111111-1111-1111-1111-111111111111";
-// Bench mode WITH a key → 5 scoped tools (ego tools active).
-const BENCH_ENV = { KFDB_BENCH_REPO_SCOPE: BENCH, KFDB_API_KEY: DUMMY_KEY };
-// Bench mode WITHOUT a key → 3 public scoped tools (the pilot config).
-const BENCH_ENV_NOKEY = { KFDB_BENCH_REPO_SCOPE: BENCH, KFDB_API_KEY: "" };
+// Bench mode WITH the explicit bench-tools key → 5 scoped tools (ego active).
+const BENCH_ENV = {
+  KFDB_BENCH_REPO_SCOPE: BENCH,
+  KFDB_BENCH_TOOLS_API_KEY: DUMMY_KEY,
+  KFDB_API_KEY: "",
+};
+// Bench mode WITHOUT any key → 3 public scoped tools (the pilot config).
+const BENCH_ENV_NOKEY = {
+  KFDB_BENCH_REPO_SCOPE: BENCH,
+  KFDB_API_KEY: "",
+  KFDB_BENCH_TOOLS_API_KEY: "",
+};
 
 describe("tools/list by mode + API-key gating", () => {
   it("full mode + key exposes all 7 tools incl. discovery tools", () => {
@@ -109,20 +117,44 @@ describe("tools/list by mode + API-key gating", () => {
     expect(names).toContain("list_repos");
   });
 
-  it("bench mode + key exposes the 5 scoped tools (no list_repos / repo_overview)", () => {
+  it("bench mode + KFDB_BENCH_TOOLS_API_KEY exposes the 5 scoped tools", () => {
     const names = listTools(BENCH_ENV);
     expect(names.sort()).toEqual([...SCOPED].sort());
     expect(names).not.toContain("list_repos");
     expect(names).not.toContain("repo_overview");
   });
 
-  it("bench mode WITHOUT key exposes ONLY the 3 public tools (pilot config)", () => {
+  it("bench mode WITHOUT any key exposes ONLY the 3 public tools (pilot config)", () => {
     const names = listTools(BENCH_ENV_NOKEY);
     expect(names.sort()).toEqual(
       ["search_code", "find_symbol", "get_context_bundle"].sort(),
     );
     expect(names).not.toContain("get_callers");
     expect(names).not.toContain("get_callees");
+  });
+
+  // Gate B attack #7 — env-leak: a sloppy runner with ambient KFDB_API_KEY set
+  // but NO explicit bench-tools key must NOT silently promote to 5 tools.
+  it("bench mode IGNORES ambient KFDB_API_KEY → still exactly 3 tools", () => {
+    const names = listTools({
+      KFDB_BENCH_REPO_SCOPE: BENCH,
+      KFDB_API_KEY: "leaked-runner-key",
+      KFDB_BENCH_TOOLS_API_KEY: "",
+    });
+    expect(names.sort()).toEqual(
+      ["search_code", "find_symbol", "get_context_bundle"].sort(),
+    );
+    expect(names).not.toContain("get_callers");
+    expect(names).not.toContain("get_callees");
+  });
+
+  it("bench mode: ambient KFDB_API_KEY alone cannot run get_callers", () => {
+    const out = callTool(
+      { KFDB_BENCH_REPO_SCOPE: BENCH, KFDB_API_KEY: "leaked-runner-key" },
+      "get_callers",
+      { node_id: "00000000-dead-beef-0000-000000000000" },
+    );
+    expect(out).toMatch(/requires KFDB_BENCH_TOOLS_API_KEY/i);
   });
 });
 
@@ -153,10 +185,10 @@ describe("bench-mode guards (pre-network, red-team vectors)", () => {
     expect(out).toMatch(/must be a string/i);
   });
 
-  it("rejects a call-graph tool when no API key is configured", () => {
+  it("rejects a call-graph tool in bench mode when no bench-tools key is set", () => {
     const out = callTool(BENCH_ENV_NOKEY, "get_callers", {
       node_id: "00000000-dead-beef-0000-000000000000",
     });
-    expect(out).toMatch(/requires a KFDB API key/i);
+    expect(out).toMatch(/requires KFDB_BENCH_TOOLS_API_KEY/i);
   });
 });

@@ -12,7 +12,7 @@ import {
 } from "./kfdb.js";
 import { sanitizeGoldFields } from "./sanitize.js";
 import { rememberNodeIds, isNodeIdAllowed } from "./session.js";
-import { IS_BENCH_MODE, HAS_API_KEY, SNIPPET_MAX_LENGTH } from "./config.js";
+import { IS_BENCH_MODE, EGO_TOOLS_ENABLED, SNIPPET_MAX_LENGTH } from "./config.js";
 
 // The five tools available under bench mode (read-only code navigation only).
 export const SCOPED_TOOL_NAMES = [
@@ -23,17 +23,19 @@ export const SCOPED_TOOL_NAMES = [
   "get_context_bundle",
 ] as const;
 
-// The two call-graph tools require a KFDB API key (tenant-authenticated
-// /api/v1/graph/ego). When no key is configured they are omitted so an agent is
-// never offered a tool that can only error.
+// The two call-graph tools require an authenticated key for the ego endpoint.
+// In bench mode that key is the explicit KFDB_BENCH_TOOLS_API_KEY (never the
+// ambient KFDB_API_KEY); in full mode it is KFDB_API_KEY. When unavailable they
+// are omitted so an agent is never offered a tool that can only error — and so
+// an env-leaked ambient key can't flip the keyless 3-tool bench arm to 5.
 const KEY_REQUIRED_TOOL_NAMES = new Set<string>(["get_callers", "get_callees"]);
 
-/** Tool names runnable in the current process given mode + key presence. */
+/** Tool names runnable in the current process given mode + ego-key availability. */
 export function activeToolNames(): Set<string> {
   const base = IS_BENCH_MODE
     ? new Set<string>(SCOPED_TOOL_NAMES)
     : new Set<string>(TOOL_DEFS.map((t) => t.name));
-  if (!HAS_API_KEY) {
+  if (!EGO_TOOLS_ENABLED) {
     for (const n of KEY_REQUIRED_TOOL_NAMES) base.delete(n);
   }
   return base;
@@ -335,7 +337,9 @@ export async function handleToolCall(
     }
     if (KEY_REQUIRED_TOOL_NAMES.has(name)) {
       return {
-        error: `tool "${name}" requires a KFDB API key (set KFDB_API_KEY); it is not available in this session`,
+        error: IS_BENCH_MODE
+          ? `tool "${name}" requires KFDB_BENCH_TOOLS_API_KEY in bench mode; it is not available in this session`
+          : `tool "${name}" requires a KFDB API key (set KFDB_API_KEY); it is not available in this session`,
       };
     }
     return { error: `tool "${name}" is not available in this session` };

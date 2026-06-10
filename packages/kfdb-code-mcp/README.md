@@ -24,21 +24,33 @@ Snippets are capped (~400 chars) — agents are expected to already have the rep
 checked out locally; these tools locate and rank, they do not deliver files.
 
 **API-key gating**: `get_callers`/`get_callees` hit the tenant-authenticated
-ego-graph endpoint and only work with `KFDB_API_KEY`. When no key is configured,
-those two tools are **omitted from `tools/list` entirely** (not registered) so an
-agent is never offered a tool that can only error. Tool counts:
+ego-graph endpoint and only work with a key. When no key is available, those two
+tools are **omitted from `tools/list` entirely** (not registered) so an agent is
+never offered a tool that can only error. Crucially, the key that enables them is
+**mode-dependent**:
 
-| Mode | With `KFDB_API_KEY` | Without |
-|---|---|---|
-| Full | 7 | 5 |
-| Bench (`KFDB_BENCH_REPO_SCOPE` set) | 5 | 3 |
+- **Full mode** → `KFDB_API_KEY`.
+- **Bench mode** → the explicit **`KFDB_BENCH_TOOLS_API_KEY` only**. The ambient
+  `KFDB_API_KEY` is deliberately ignored in bench mode, so a runner that happens
+  to have `KFDB_API_KEY` in its environment cannot silently promote the keyless
+  3-tool surface to 5 tools (which would flip an experiment arm).
+
+| Mode | Key that enables ego tools | With key | Without |
+|---|---|---|---|
+| Full | `KFDB_API_KEY` | 7 | 5 |
+| Bench (`KFDB_BENCH_REPO_SCOPE` set) | `KFDB_BENCH_TOOLS_API_KEY` | 5 | 3 |
+
+In bench mode the ambient `KFDB_API_KEY` is never sent on any request either —
+the public search/context calls go out unauthenticated, and the ego call uses
+`KFDB_BENCH_TOOLS_API_KEY`.
 
 ## Configuration
 
 | Env var | Default | Purpose |
 |---|---|---|
 | `KFDB_API_URL` | `http://34.60.37.158` | KFDB API base URL |
-| `KFDB_API_KEY` | _(unset)_ | Bearer token. Required only for `get_callers`/`get_callees` (the ego-graph endpoint is tenant-authenticated). Search + context bundles are public. |
+| `KFDB_API_KEY` | _(unset)_ | Bearer token. In **full mode** enables `get_callers`/`get_callees`. **Ignored in bench mode.** Search + context bundles are public. |
+| `KFDB_BENCH_TOOLS_API_KEY` | _(unset)_ | **Bench mode only.** Explicit opt-in key that enables the 2 call-graph tools under bench mode. Absent ⇒ keyless 3-tool surface. |
 | `KFDB_BENCH_REPO_SCOPE` | _(unset)_ | When set to a repo_id (UUID), enables bench mode (see below). |
 | `RESPONSE_MAX_LENGTH` | `200000` | Whole-response character cap. |
 | `SNIPPET_MAX_LENGTH` | `400` | Per-snippet character cap. |

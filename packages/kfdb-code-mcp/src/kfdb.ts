@@ -4,10 +4,18 @@
 
 import {
   KFDB_API_URL,
-  KFDB_API_KEY,
+  EGO_API_KEY,
+  EGO_TOOLS_ENABLED,
   BENCH_REPO_SCOPE,
   IS_BENCH_MODE,
 } from "./config.js";
+
+// The auth key used on outbound requests. In bench mode this is the explicit
+// bench-tools key (EGO_API_KEY === KFDB_BENCH_TOOLS_API_KEY) — the ambient
+// KFDB_API_KEY is deliberately never sent in bench mode, so an env-leaked
+// runner key can neither flip the tool surface nor attach the runner's identity
+// to the (public) search/context calls.
+const AUTH_KEY = EGO_API_KEY;
 
 async function kfdbFetch(
   path: string,
@@ -16,7 +24,7 @@ async function kfdbFetch(
   const url = `${KFDB_API_URL}${path}`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...(KFDB_API_KEY ? { Authorization: `Bearer ${KFDB_API_KEY}` } : {}),
+    ...(AUTH_KEY ? { Authorization: `Bearer ${AUTH_KEY}` } : {}),
     ...((options?.headers as Record<string, string>) || {}),
   };
   return fetch(url, { ...options, headers });
@@ -148,8 +156,9 @@ export interface EgoGraphResponse {
 
 /**
  * POST /api/v1/graph/ego — k-hop subgraph around a node.
- * Requires a valid KFDB_API_KEY (tenant-scoped endpoint). The seed node_id
- * allowlist check is enforced by the caller (tool handler) in bench mode.
+ * Requires an authenticated key (tenant-scoped endpoint): the explicit
+ * KFDB_BENCH_TOOLS_API_KEY in bench mode, or KFDB_API_KEY in full mode. The seed
+ * node_id allowlist check is enforced by the caller (tool handler) in bench mode.
  */
 export async function egoGraph(args: {
   node_id: string;
@@ -158,9 +167,11 @@ export async function egoGraph(args: {
   max_nodes?: number;
   direction?: string;
 }): Promise<EgoGraphResponse> {
-  if (!KFDB_API_KEY) {
+  if (!EGO_TOOLS_ENABLED) {
     throw new Error(
-      "graph/ego requires KFDB_API_KEY (authenticated endpoint); call navigation tools without it disabled, or set the key.",
+      IS_BENCH_MODE
+        ? "graph/ego requires KFDB_BENCH_TOOLS_API_KEY in bench mode (the ambient KFDB_API_KEY is intentionally ignored)."
+        : "graph/ego requires KFDB_API_KEY (authenticated endpoint).",
     );
   }
   const body: Record<string, unknown> = {

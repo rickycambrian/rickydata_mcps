@@ -64,17 +64,21 @@ jobs:
           FULL=$(count KFDB_API_KEY=ci-dummy)
           # Full mode, no key = 7 - 2 ego tools = 5.
           FULL_NOKEY=$(count KFDB_API_KEY=)
-          # Bench mode + API key = 5 scoped tools.
-          BENCH=$(count KFDB_BENCH_REPO_SCOPE=11111111-1111-1111-1111-111111111111 KFDB_API_KEY=ci-dummy)
+          # Bench mode + explicit bench-tools key = 5 scoped tools.
+          BENCH=$(count KFDB_BENCH_REPO_SCOPE=11111111-1111-1111-1111-111111111111 KFDB_BENCH_TOOLS_API_KEY=ci-dummy)
           # Bench mode, no key = 3 public scoped tools (this is the pilot config).
           BENCH_NOKEY=$(count KFDB_BENCH_REPO_SCOPE=11111111-1111-1111-1111-111111111111 KFDB_API_KEY=)
+          # Gate B #7 env-leak: bench mode + ambient KFDB_API_KEY but NO bench-tools key
+          # must STAY at 3 (ambient key must not promote the arm to 5).
+          BENCH_LEAK=$(count KFDB_BENCH_REPO_SCOPE=11111111-1111-1111-1111-111111111111 KFDB_API_KEY=leaked-runner-key)
 
           echo "count=$FULL" >> "$GITHUB_OUTPUT"
-          echo "::notice::tools — full(key)=$FULL full(nokey)=$FULL_NOKEY bench(key)=$BENCH bench(nokey)=$BENCH_NOKEY"
+          echo "::notice::tools — full(key)=$FULL full(nokey)=$FULL_NOKEY bench(toolskey)=$BENCH bench(nokey)=$BENCH_NOKEY bench(ambient-leak)=$BENCH_LEAK"
           fail=0
           [ "$FULL" -eq 7 ] || { echo "::error::full+key expected 7, got $FULL"; fail=1; }
           [ "$FULL_NOKEY" -eq 5 ] || { echo "::error::full+nokey expected 5, got $FULL_NOKEY"; fail=1; }
-          [ "$BENCH" -eq 5 ] || { echo "::error::bench+key expected 5, got $BENCH"; fail=1; }
+          [ "$BENCH" -eq 5 ] || { echo "::error::bench+toolskey expected 5, got $BENCH"; fail=1; }
+          [ "$BENCH_LEAK" -eq 3 ] || { echo "::error::bench+ambient-leak expected 3 (env-leak guard), got $BENCH_LEAK"; fail=1; }
           [ "$BENCH_NOKEY" -eq 3 ] || { echo "::error::bench+nokey expected 3, got $BENCH_NOKEY"; fail=1; }
           [ "$fail" -eq 0 ] || exit 1
 
