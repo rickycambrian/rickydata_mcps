@@ -2,7 +2,7 @@
 
 Private-only MCP for **rickydata Product Copilot** roadmap, release-readiness, screenshot gates, and human-in-loop priority review data.
 
-This MCP is the product-specific complement to the local/admin KFDB tooling. It is intentionally narrow, but it is not a public/shared feed: every runtime must be mounted behind RickyData Gateway or another private operator surface that injects the active wallet's sign-to-derive material. Missing wallet-derived headers fail closed instead of falling back to embedded/public data.
+This MCP is the product-specific complement to local/admin KFDB tooling. It is intentionally narrow, but it is not a public/shared feed: production runtimes must be mounted behind RickyData Gateway or another private operator surface that injects the active logged-in wallet context. Missing wallet context fails closed instead of falling back to embedded/public data.
 
 ## Tools
 
@@ -17,23 +17,20 @@ This MCP is the product-specific complement to the local/admin KFDB tooling. It 
 | `get_mom_test_evidence_gaps` | Group missing Mom Test / discovery evidence by evidence type. |
 | `get_human_approval_blockers` | List items that need human review, evidence, or approval before automation/release work proceeds. |
 
-## Data source
+## Auth and data source model
 
-Required private configuration:
+The logged-in wallet is the auth boundary. Product Copilot does **not** require users to store `PRODUCT_COPILOT_KFDB_API_KEY`, derive keys, or Product Copilot env vars through `/api/secrets`.
 
-| Env var | Purpose |
-|---|---|
-| `PRODUCT_COPILOT_KFDB_API_URL` / `KFDB_API_URL` | Private KFDB endpoint used by `setup_private_product_copilot`. |
-| `PRODUCT_COPILOT_KFDB_API_KEY` / `RICKYDATA_KFDB_API_KEY` / `KFDB_API_KEY` | Service bearer for private tenant schema setup. Not sufficient without derive headers. |
-| `PRODUCT_COPILOT_PM_REPORT_URL` or `PRODUCT_COPILOT_PM_REPORT_PATH` | Private HIL feed source. No embedded/public fallback exists. |
-| `PRODUCT_COPILOT_WALLET_ADDRESS` or `RICKYDATA_KFDB_WALLET_ADDRESS` | Active wallet owner for the private tenant. |
-| `PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID` or `RICKYDATA_KFDB_DERIVE_SESSION_ID` | Active sign-to-derive session id. |
-| `PRODUCT_COPILOT_KFDB_DERIVE_KEY` or `RICKYDATA_KFDB_DERIVE_KEY` | Active wallet-derived key. |
-| `PRODUCT_COPILOT_PM_REPORT_BEARER_TOKEN` / `RICKYDATA_KFDB_API_KEY` / `KFDB_API_KEY` | Optional service bearer for the private feed endpoint. |
+Runtime context is split into two layers:
 
-The URL fetch path sends `X-Wallet-Address`, `X-Derive-Session-Id`, and `X-Derive-Key` headers. If the source or derive material is missing, read tools return a structured `missing_private_tenant_config` response that points the agent at `setup_private_product_copilot` instead of throwing a generic MCP internal error.
+| Layer | Examples | Owner |
+|---|---|---|
+| Platform wallet context | `RICKYDATA_AUTH_WALLET_ADDRESS`, `PRODUCT_COPILOT_WALLET_ADDRESS`, optional `RICKYDATA_AUTH_TOKEN` | RickyData Gateway, derived from the authenticated wallet/session |
+| Operator feed/config | `PRODUCT_COPILOT_PM_REPORT_URL`, optional `PRODUCT_COPILOT_PM_REPORT_PATH`, `RICKYDATA_KFDB_URL` | RickyData deployment/operator config |
 
-`setup_private_product_copilot` writes deterministic `mode: "merge"` KFDB operations for `WalletTenant`, `AppSchemaVersion`, and `SchemaBootstrap`, so rerunning it after the schema already exists leaves the tenant alone and reports `initialized_or_already_exists`.
+The URL fetch path sends `X-Wallet-Address` and, when available, an auth token supplied by the gateway. If the source or wallet context is missing, read tools return structured setup guidance instead of throwing a generic MCP internal error.
+
+`setup_private_product_copilot` plans/writes deterministic `mode: "merge"` KFDB operations for `WalletTenant`, `AppSchemaVersion`, and `SchemaBootstrap`, so rerunning it after the schema already exists is safe. If wallet-auth KFDB write capability is not exposed to the runtime yet, the setup tool returns `wallet_auth_write_unavailable` with the planned idempotent operations rather than requesting an API key.
 
 ## Usage
 
@@ -41,7 +38,7 @@ The URL fetch path sends `X-Wallet-Address`, `X-Derive-Session-Id`, and `X-Deriv
 npx -y @rickydata/product-copilot-mcp
 ```
 
-Hermes/Claude Desktop style config must be supplied by a private operator/gateway context. Do not put raw values in checked-in config:
+Gateway-style config should inject wallet context automatically. A local/operator-only development example can use:
 
 ```json
 {
@@ -51,18 +48,14 @@ Hermes/Claude Desktop style config must be supplied by a private operator/gatewa
       "args": ["-y", "@rickydata/product-copilot-mcp"],
       "env": {
         "PRODUCT_COPILOT_PM_REPORT_URL": "https://<private-deployment>/api/roadmap/hil-feed",
-        "PRODUCT_COPILOT_WALLET_ADDRESS": "${RICKYDATA_KFDB_WALLET_ADDRESS}",
-        "PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID": "${RICKYDATA_KFDB_DERIVE_SESSION_ID}",
-        "PRODUCT_COPILOT_KFDB_DERIVE_KEY": "${RICKYDATA_KFDB_DERIVE_KEY}"
+        "PRODUCT_COPILOT_WALLET_ADDRESS": "${RICKYDATA_AUTH_WALLET_ADDRESS}"
       }
     }
   }
 }
 ```
 
-## Auth model
-
-The MCP itself does not use an admin KFDB-only path or a shared embedded feed. Production calls must be routed through RickyData Gateway or a private operator surface that injects the active wallet and sign-to-derive session for the same private tenant used by `rickydata_notes`. This preserves cross-system graph joins across notes, rickydata_git, Hermes sessions, Product Copilot, and Sales Coach without leaking the graph into a public/shared keyspace.
+Do not commit real wallet tokens, bearer tokens, API keys, derive keys, or private feed URLs.
 
 ## Development
 

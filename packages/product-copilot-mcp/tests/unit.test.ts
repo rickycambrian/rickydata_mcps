@@ -22,7 +22,7 @@ describe('tool surface', () => {
     for (const expected of TOOL_NAMES) expect(names).toContain(expected);
   });
 
-  it('fails closed without a private feed source and wallet-derived material', async () => {
+  it('fails closed without a private feed source and wallet context', async () => {
     await expect(readConfiguredFeedText({
       env: {},
       defaultLocalFeedPath: '/definitely/missing/product-copilot-feed.json',
@@ -36,17 +36,15 @@ describe('tool surface', () => {
     })).rejects.toThrow(/Public\/embedded fallback is disabled/);
 
     const handled = await handleToolCall('list_priority_items', { limit: 5 }) as any;
-    expect(handled.status).toBe('missing_private_tenant_config');
-    expect(handled.nextSteps.join(' ')).toContain('setup_private_product_copilot');
+    expect(['missing_wallet_context', 'wallet_auth_write_unavailable']).toContain(handled.status);
+    expect(handled.nextSteps.join(' ')).toContain('Do not store Product Copilot KFDB API keys as user secrets');
   });
 
-  it('sends private wallet derive headers to configured feed URLs', async () => {
+  it('sends authenticated wallet headers to configured feed URLs without requiring KFDB API keys', async () => {
     const env = {
       PRODUCT_COPILOT_PM_REPORT_URL: 'https://private.example/hil-feed',
-      PRODUCT_COPILOT_PM_REPORT_BEARER_TOKEN: 'test-token',
-      PRODUCT_COPILOT_WALLET_ADDRESS: '0xabc',
-      PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID: 'derive-session',
-      PRODUCT_COPILOT_KFDB_DERIVE_KEY: 'derive-key',
+      RICKYDATA_AUTH_TOKEN: 'wallet-session-token',
+      RICKYDATA_AUTH_WALLET_ADDRESS: '0xabc',
     };
     let capturedHeaders: HeadersInit | undefined;
     const loaded = await readConfiguredFeedText({
@@ -59,28 +57,22 @@ describe('tool surface', () => {
 
     expect(loaded.source).toBe(env.PRODUCT_COPILOT_PM_REPORT_URL);
     expect(capturedHeaders).toMatchObject({
-      Authorization: 'Bearer test-token',
+      Authorization: 'Bearer wallet-session-token',
       'X-Wallet-Address': '0xabc',
-      'X-Derive-Session-Id': 'derive-session',
-      'X-Derive-Key': 'derive-key',
     });
-    expect(privateFeedHeaders(env)['X-Derive-Key']).toBe('derive-key');
+    expect(privateFeedHeaders(env)).not.toHaveProperty('X-Derive-Key');
   });
 
-  it('idempotently plans and writes private Product Copilot schema setup', async () => {
+  it('idempotently plans and writes private Product Copilot schema setup with wallet auth when available', async () => {
     const env = {
       PRODUCT_COPILOT_KFDB_API_URL: 'https://kfdb.example',
-      PRODUCT_COPILOT_KFDB_API_KEY: 'test-api-key',
-      PRODUCT_COPILOT_WALLET_ADDRESS: '0xABC',
-      PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID: 'derive-session',
-      PRODUCT_COPILOT_KFDB_DERIVE_KEY: 'derive-key',
+      RICKYDATA_AUTH_TOKEN: 'wallet-session-token',
+      RICKYDATA_AUTH_WALLET_ADDRESS: '0xABC',
     };
     const ops = productCopilotSchemaOperations({
       baseUrl: env.PRODUCT_COPILOT_KFDB_API_URL,
-      apiKey: env.PRODUCT_COPILOT_KFDB_API_KEY,
-      walletAddress: env.PRODUCT_COPILOT_WALLET_ADDRESS,
-      deriveSessionId: env.PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID,
-      deriveKey: env.PRODUCT_COPILOT_KFDB_DERIVE_KEY,
+      authToken: env.RICKYDATA_AUTH_TOKEN,
+      walletAddress: env.RICKYDATA_AUTH_WALLET_ADDRESS,
     }, { now: '2026-06-13T00:00:00.000Z' });
     expect(ops).toHaveLength(5);
     expect(ops.every((op) => op.mode === 'merge')).toBe(true);
@@ -102,10 +94,8 @@ describe('tool surface', () => {
     expect(result.idempotent).toBe(true);
     expect(capturedUrl).toBe('https://kfdb.example/api/v1/write');
     expect(capturedInit?.headers).toMatchObject({
-      authorization: 'Bearer test-api-key',
+      authorization: 'Bearer wallet-session-token',
       'X-Wallet-Address': '0xABC',
-      'X-Derive-Session-Id': 'derive-session',
-      'X-Derive-Key': 'derive-key',
     });
     const body = JSON.parse(String(capturedInit?.body));
     expect(body.operations.every((op: any) => op.mode === 'merge')).toBe(true);

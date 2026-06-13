@@ -15,34 +15,36 @@ export interface ReadConfiguredFeedOptions {
 export interface ProductCopilotPrivateHeaders {
   Authorization?: string;
   'X-Wallet-Address'?: string;
-  'X-Derive-Session-Id'?: string;
-  'X-Derive-Key'?: string;
+}
+
+export function productCopilotWalletAddress(env: Record<string, string | undefined> = process.env): string {
+  return (env.PRODUCT_COPILOT_WALLET_ADDRESS
+    || env.RICKYDATA_AUTH_WALLET_ADDRESS
+    || env.RICKYDATA_KFDB_WALLET_ADDRESS
+    || env.RICKYDATA_WALLET_ADDRESS
+    || '').trim();
 }
 
 export function privateFeedHeaders(env: Record<string, string | undefined> = process.env): ProductCopilotPrivateHeaders {
-  const bearer = env.PRODUCT_COPILOT_PM_REPORT_BEARER_TOKEN || env.RICKYDATA_KFDB_API_KEY || env.KFDB_API_KEY;
-  const wallet = env.PRODUCT_COPILOT_WALLET_ADDRESS || env.RICKYDATA_KFDB_WALLET_ADDRESS;
-  const deriveSessionId = env.PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID || env.RICKYDATA_KFDB_DERIVE_SESSION_ID;
-  const deriveKey = env.PRODUCT_COPILOT_KFDB_DERIVE_KEY || env.RICKYDATA_KFDB_DERIVE_KEY;
+  const bearer = env.PRODUCT_COPILOT_PM_REPORT_BEARER_TOKEN || env.RICKYDATA_AUTH_TOKEN || env.RICKYDATA_KFDB_AUTH_TOKEN;
+  const wallet = productCopilotWalletAddress(env);
   const headers: ProductCopilotPrivateHeaders = {};
   if (bearer) headers.Authorization = `Bearer ${bearer}`;
   if (wallet) headers['X-Wallet-Address'] = wallet;
-  if (deriveSessionId) headers['X-Derive-Session-Id'] = deriveSessionId;
-  if (deriveKey) headers['X-Derive-Key'] = deriveKey;
   return headers;
 }
 
 export function assertPrivateFeedConfigured(env: Record<string, string | undefined> = process.env): void {
   const source = env.PRODUCT_COPILOT_PM_REPORT_URL || env.PRODUCT_COPILOT_PM_REPORT_PATH;
-  const headers = privateFeedHeaders(env);
+  const wallet = productCopilotWalletAddress(env);
   if (!source) {
     throw new Error(
-      'Product Copilot private feed is not configured: set PRODUCT_COPILOT_PM_REPORT_URL or PRODUCT_COPILOT_PM_REPORT_PATH. Public/embedded fallback is disabled.',
+      'Product Copilot private feed is not configured by the RickyData Gateway operator. Public/embedded fallback is disabled.',
     );
   }
-  if (!headers['X-Wallet-Address'] || !headers['X-Derive-Session-Id'] || !headers['X-Derive-Key']) {
+  if (!wallet) {
     throw new Error(
-      'Product Copilot private feed requires wallet sign-to-derive material: X-Wallet-Address, X-Derive-Session-Id, and X-Derive-Key.',
+      'Product Copilot private feed requires authenticated wallet context from RickyData Gateway. Do not store KFDB/API keys as user secrets.',
     );
   }
 }

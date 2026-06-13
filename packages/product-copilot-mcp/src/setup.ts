@@ -5,11 +5,9 @@ export const PRODUCT_COPILOT_SCHEMA_VERSION = '1.0.0';
 const PRODUCT_COPILOT_SCHEMA_NAMESPACE = '9f8cb3a6-7964-58d6-8e7c-7ce30ecdb9cc';
 
 export interface PrivateTenantConfig {
-  baseUrl: string;
-  apiKey: string;
+  baseUrl?: string;
   walletAddress: string;
-  deriveSessionId: string;
-  deriveKey: string;
+  authToken?: string;
 }
 
 export interface SetupProductCopilotOptions {
@@ -22,11 +20,11 @@ export interface SetupProductCopilotOptions {
 
 export interface SetupStatus {
   ok: boolean;
-  status: 'missing_private_tenant_config' | 'dry_run' | 'initialized_or_already_exists';
+  status: 'missing_wallet_context' | 'wallet_auth_write_unavailable' | 'dry_run' | 'initialized_or_already_exists';
   appId: string;
   schemaVersion: string;
   idempotent: true;
-  missingEnv?: string[];
+  missingContext?: string[];
   feedConfigured: boolean;
   operationsPlanned?: number;
   labels?: string[];
@@ -49,24 +47,21 @@ const kfBool = (value: boolean) => ({ Boolean: value });
 
 export function resolvePrivateTenantConfig(env: Record<string, string | undefined> = process.env): {
   config?: PrivateTenantConfig;
-  missingEnv: string[];
+  missingContext: string[];
   feedConfigured: boolean;
 } {
   const baseUrl = env.PRODUCT_COPILOT_KFDB_API_URL || env.RICKYDATA_KFDB_URL || env.KFDB_API_URL;
-  const apiKey = env.PRODUCT_COPILOT_KFDB_API_KEY || env.RICKYDATA_KFDB_API_KEY || env.KFDB_API_KEY || env.PRODUCT_COPILOT_PM_REPORT_BEARER_TOKEN;
-  const walletAddress = env.PRODUCT_COPILOT_WALLET_ADDRESS || env.RICKYDATA_KFDB_WALLET_ADDRESS;
-  const deriveSessionId = env.PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID || env.RICKYDATA_KFDB_DERIVE_SESSION_ID;
-  const deriveKey = env.PRODUCT_COPILOT_KFDB_DERIVE_KEY || env.RICKYDATA_KFDB_DERIVE_KEY;
-  const missingEnv: string[] = [];
-  if (!baseUrl) missingEnv.push('PRODUCT_COPILOT_KFDB_API_URL or KFDB_API_URL');
-  if (!apiKey) missingEnv.push('PRODUCT_COPILOT_KFDB_API_KEY or RICKYDATA_KFDB_API_KEY or KFDB_API_KEY');
-  if (!walletAddress) missingEnv.push('PRODUCT_COPILOT_WALLET_ADDRESS or RICKYDATA_KFDB_WALLET_ADDRESS');
-  if (!deriveSessionId) missingEnv.push('PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID or RICKYDATA_KFDB_DERIVE_SESSION_ID');
-  if (!deriveKey) missingEnv.push('PRODUCT_COPILOT_KFDB_DERIVE_KEY or RICKYDATA_KFDB_DERIVE_KEY');
+  const walletAddress = env.PRODUCT_COPILOT_WALLET_ADDRESS
+    || env.RICKYDATA_KFDB_WALLET_ADDRESS
+    || env.RICKYDATA_AUTH_WALLET_ADDRESS
+    || env.RICKYDATA_WALLET_ADDRESS;
+  const authToken = env.RICKYDATA_KFDB_AUTH_TOKEN || env.RICKYDATA_AUTH_TOKEN;
+  const missingContext: string[] = [];
+  if (!walletAddress) missingContext.push('authenticated wallet context from RickyData Gateway');
 
   return {
-    config: missingEnv.length === 0 ? { baseUrl: baseUrl!, apiKey: apiKey!, walletAddress: walletAddress!, deriveSessionId: deriveSessionId!, deriveKey: deriveKey! } : undefined,
-    missingEnv,
+    config: missingContext.length === 0 ? { baseUrl, walletAddress: walletAddress!, authToken } : undefined,
+    missingContext,
     feedConfigured: Boolean(env.PRODUCT_COPILOT_PM_REPORT_URL || env.PRODUCT_COPILOT_PM_REPORT_PATH),
   };
 }
@@ -154,18 +149,24 @@ export function privateSetupGuidance(error?: unknown, env: Record<string, string
   const resolved = resolvePrivateTenantConfig(env);
   return {
     ok: false,
-    status: 'missing_private_tenant_config',
+    status: resolved.config ? 'wallet_auth_write_unavailable' : 'missing_wallet_context',
     appId: PRODUCT_COPILOT_APP_ID,
     schemaVersion: PRODUCT_COPILOT_SCHEMA_VERSION,
     idempotent: true,
-    missingEnv: resolved.missingEnv,
+    missingContext: resolved.missingContext,
     feedConfigured: resolved.feedConfigured,
     proof: error instanceof Error ? [`blocked_before_private_read: ${error.message}`] : undefined,
-    nextSteps: [
-      'Run setup_private_product_copilot after RickyData Gateway injects the active wallet sign-to-derive material.',
-      'Configure PRODUCT_COPILOT_PM_REPORT_URL or PRODUCT_COPILOT_PM_REPORT_PATH for the private HIL feed once the tenant is initialized.',
-      'Do not enable public/shared fallback for Product Copilot user/app data.',
-    ],
+    nextSteps: resolved.config
+      ? [
+        'Gateway provided wallet context; configure a wallet-auth private feed/write endpoint for Product Copilot.',
+        'Do not store Product Copilot KFDB API keys as user secrets.',
+        'Do not enable public/shared fallback for Product Copilot user/app data.',
+      ]
+      : [
+        'Authenticate through RickyData Gateway / Privy so the MCP receives wallet context automatically.',
+        'Do not store Product Copilot KFDB API keys as user secrets.',
+        'Do not enable public/shared fallback for Product Copilot user/app data.',
+      ],
   };
 }
 
@@ -176,15 +177,14 @@ export async function setupProductCopilotPrivateTenant(options: SetupProductCopi
   if (!resolved.config) {
     return {
       ok: false,
-      status: 'missing_private_tenant_config',
+      status: 'missing_wallet_context',
       appId: PRODUCT_COPILOT_APP_ID,
       schemaVersion,
       idempotent: true,
-      missingEnv: resolved.missingEnv,
+      missingContext: resolved.missingContext,
       feedConfigured: resolved.feedConfigured,
       nextSteps: [
-        'Authenticate through RickyData Gateway / Privy and complete wallet sign-to-derive.',
-        'Inject KFDB endpoint, service bearer, wallet address, derive session id, and derive key into this private MCP runtime.',
+        'Authenticate through RickyData Gateway / Privy; the logged-in wallet is the auth boundary.',
         'Rerun setup_private_product_copilot; it is safe to run repeatedly.',
       ],
     };
@@ -195,10 +195,10 @@ export async function setupProductCopilotPrivateTenant(options: SetupProductCopi
   const labels = operations.filter((op) => op.operation === 'create_node').map((op) => String(op.label));
   const edges = operations.filter((op) => op.operation === 'create_edge').map((op) => String(op.edge_type));
 
-  if (options.dryRun) {
+  if (options.dryRun || !resolved.config.baseUrl || !resolved.config.authToken) {
     return {
       ok: true,
-      status: 'dry_run',
+      status: options.dryRun ? 'dry_run' : 'wallet_auth_write_unavailable',
       appId: PRODUCT_COPILOT_APP_ID,
       schemaVersion,
       idempotent: true,
@@ -206,8 +206,14 @@ export async function setupProductCopilotPrivateTenant(options: SetupProductCopi
       operationsPlanned: operations.length,
       labels,
       edges,
-      proof: ['planned deterministic merge operations only; no network write performed'],
-      nextSteps: ['Run setup_private_product_copilot with dry_run=false to initialize or verify the private tenant schema.'],
+      proof: [
+        'planned deterministic merge operations only; no unauthenticated private write performed',
+        `wallet_context_present: ${Boolean(resolved.config.walletAddress)}`,
+        `wallet_auth_endpoint_present: ${Boolean(resolved.config.baseUrl && resolved.config.authToken)}`,
+      ],
+      nextSteps: options.dryRun
+        ? ['Run setup_private_product_copilot with dry_run=false after gateway provides wallet-auth KFDB write capability.']
+        : ['Gateway wallet context is present, but wallet-auth KFDB write capability is not yet exposed to this MCP runtime.'],
     };
   }
 
@@ -217,10 +223,8 @@ export async function setupProductCopilotPrivateTenant(options: SetupProductCopi
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      authorization: `Bearer ${resolved.config.apiKey}`,
+      authorization: `Bearer ${resolved.config.authToken}`,
       'X-Wallet-Address': resolved.config.walletAddress,
-      'X-Derive-Session-Id': resolved.config.deriveSessionId,
-      'X-Derive-Key': resolved.config.deriveKey,
     },
     body: JSON.stringify({ operations }),
   });
@@ -240,12 +244,12 @@ export async function setupProductCopilotPrivateTenant(options: SetupProductCopi
     labels,
     edges,
     proof: [
-      'private tenant headers were sent with values redacted',
+      'wallet-auth private tenant headers were sent with values redacted',
       'deterministic merge ids make reruns safe when schema already exists',
       `kfdb_write_status: ${res.status}`,
     ],
     nextSteps: resolved.feedConfigured
       ? ['Private schema is initialized; read tools can now use the configured private HIL feed.']
-      : ['Private schema is initialized; configure PRODUCT_COPILOT_PM_REPORT_URL or PRODUCT_COPILOT_PM_REPORT_PATH before using feed read tools.'],
+      : ['Private schema is initialized; configure a wallet-auth private Product Copilot feed endpoint before using feed read tools.'],
   };
 }
