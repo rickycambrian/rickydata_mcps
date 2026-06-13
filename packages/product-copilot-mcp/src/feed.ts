@@ -49,6 +49,22 @@ export interface LoadedFeed {
   feed: HILFeed;
 }
 
+const PRODUCT_COPILOT_RELEASE_REPOS = new Set([
+  'rickydata_sales_coach',
+  'rickydata-product-copilot',
+  'rickydata_github',
+]);
+
+function prioritySort(a: PriorityItem, b: PriorityItem): number {
+  return b.total - a.total || (b.mismatch?.score ?? 0) - (a.mismatch?.score ?? 0);
+}
+
+function inScope(item: PriorityItem, scope?: string): boolean {
+  if (!scope || scope === 'global') return true;
+  if (scope === 'product-copilot-release') return PRODUCT_COPILOT_RELEASE_REPOS.has(item.repo);
+  return item.repo === scope || item.surface === scope;
+}
+
 export function parseFeed(text: string, source: string): LoadedFeed {
   const parsed = JSON.parse(text) as Partial<HILFeed>;
   if (!Array.isArray(parsed.items)) {
@@ -82,7 +98,7 @@ export function listItems(
     .filter((item) => opts.minScore === undefined || item.total >= opts.minScore)
     .filter((item) => opts.minMismatch === undefined || (item.mismatch?.score ?? 0) >= opts.minMismatch)
     .filter((item) => !opts.actionContains || (item.action ?? '').toLowerCase().includes(opts.actionContains.toLowerCase()))
-    .sort((a, b) => b.total - a.total || (b.mismatch?.score ?? 0) - (a.mismatch?.score ?? 0))
+    .sort(prioritySort)
     .slice(0, limit);
 }
 
@@ -133,16 +149,85 @@ export function getQualityGates() {
   };
 }
 
+export function getTopPriorityItem(items: PriorityItem[], opts: { scope?: string } = {}) {
+  const scoped = items.filter((item) => inScope(item, opts.scope)).sort(prioritySort);
+  const top = scoped[0];
+  return {
+    scope: opts.scope ?? 'global',
+    item: top ?? null,
+    explanation: top
+      ? [
+          `Highest score in scope: ${top.total}.`,
+          top.mismatch?.score !== undefined ? `Human-objective mismatch score: ${top.mismatch.score}.` : undefined,
+          top.action ? `Recommended action: ${top.action}` : undefined,
+        ].filter(Boolean)
+      : ['No priority items matched the requested scope.'],
+  };
+}
+
+export function getMomTestEvidenceGaps(items: PriorityItem[], opts: { scope?: string; limit?: number } = {}) {
+  const limit = Math.min(Math.max(Math.floor(opts.limit ?? 20), 1), 100);
+  const grouped = new Map<string, PriorityItem[]>();
+  for (const item of items.filter((candidate) => inScope(candidate, opts.scope))) {
+    for (const gap of item.missingEvidence ?? []) {
+      const key = gap.trim();
+      if (!key) continue;
+      grouped.set(key, [...(grouped.get(key) ?? []), item]);
+    }
+  }
+
+  return {
+    scope: opts.scope ?? 'global',
+    gaps: [...grouped.entries()]
+      .map(([evidenceType, gapItems]) => ({
+        evidenceType,
+        count: gapItems.length,
+        items: gapItems.sort(prioritySort).slice(0, limit).map((item) => ({
+          repo: item.repo,
+          number: item.number,
+          title: item.title,
+          url: item.url,
+          score: item.total,
+          mismatch: item.mismatch,
+        })),
+      }))
+      .sort((a, b) => b.count - a.count || a.evidenceType.localeCompare(b.evidenceType)),
+  };
+}
+
+export function getHumanApprovalBlockers(items: PriorityItem[], opts: { scope?: string; limit?: number } = {}) {
+  const limit = Math.min(Math.max(Math.floor(opts.limit ?? 20), 1), 100);
+  const blockers = items
+    .filter((item) => inScope(item, opts.scope))
+    .filter((item) => (item.mismatch?.score ?? 0) >= 4 || (item.missingEvidence ?? []).length > 0)
+    .sort(prioritySort)
+    .slice(0, limit)
+    .map((item) => ({
+      repo: item.repo,
+      number: item.number,
+      title: item.title,
+      url: item.url,
+      score: item.total,
+      mismatchScore: item.mismatch?.score ?? 0,
+      recommendedAction: item.mismatch?.recommendedAction ?? item.action,
+      humanQuestion: item.mismatch?.humanQuestion,
+      reasons: item.mismatch?.reasons ?? [],
+      missingEvidence: item.missingEvidence ?? [],
+    }));
+
+  return {
+    scope: opts.scope ?? 'global',
+    count: blockers.length,
+    blockers,
+  };
+}
+
 export function getReleaseReadiness(items: PriorityItem[]) {
-  const releaseRepos = new Set([
-    'rickydata_sales_coach',
-    'rickydata-product-copilot',
-    'rickydata_github',
-  ]);
-  const releaseItems = items.filter((item) => releaseRepos.has(item.repo));
+  const releaseItems = items.filter((item) => PRODUCT_COPILOT_RELEASE_REPOS.has(item.repo));
   const gates = getQualityGates();
   const blockers = releaseItems
     .filter((item) => (item.mismatch?.score ?? 0) >= 4 || item.missingEvidence?.length)
+    .sort(prioritySort)
     .slice(0, 12)
     .map((item) => ({
       repo: item.repo,

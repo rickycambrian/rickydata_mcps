@@ -91,6 +91,52 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
 
+      - name: Update KFDB MCPServer entity (version + tools_available)
+        if: steps.publish.outcome == 'success'
+        # Deterministic MCPServer id = uuidv5(DNS, "@rickydata/product-copilot-mcp").
+        run: |
+          node --input-type=module - <<'NODE'
+            import { writeFileSync } from 'node:fs';
+            import { TOOL_DEFS } from './packages/product-copilot-mcp/dist/tools.js';
+            writeFileSync('/tmp/tools_available.json', JSON.stringify(TOOL_DEFS));
+          NODE
+          node -e "
+            const fs=require('fs');
+            const tools=JSON.parse(fs.readFileSync('/tmp/tools_available.json','utf8'));
+            const v='${{ steps.ver.outputs.version }}';
+            const payload={operations:[{operation:'update_node',id:'c7b40daf-dfd0-5780-8797-4e50c939be25',label:'MCPServer',properties:{
+              name:{String:'@rickydata/product-copilot-mcp'}, title:{String:'Product Copilot MCP'},
+              description:{String:'Read-only Product Copilot roadmap, release-readiness, screenshot-gate, Mom Test evidence, and human-approval blocker tools.'},
+              registry_type:{String:'npm'}, version:{String:v}, latest_version:{String:v},
+              tools_count:{Integer:tools.length}, tools_available:{String:JSON.stringify(tools)},
+              install_command:{String:'npx -y @rickydata/product-copilot-mcp@'+v},
+              run_command:{String:'npx -y @rickydata/product-copilot-mcp@'+v},
+              transport_type:{String:'stdio'}, gateway_compatible:{Boolean:true}, gateway_safe:{Boolean:true},
+              requires_auth:{Boolean:false}, required_env_vars:{String:JSON.stringify(['PRODUCT_COPILOT_PM_REPORT_URL'])},
+              enriched_at:{String:new Date().toISOString()}, enrichment_version:{Integer:5},
+            }}]};
+            fs.writeFileSync('/tmp/product-copilot-payload.json', JSON.stringify(payload));
+            console.log('KFDB payload: '+tools.length+' tools, v'+v);
+          "
+          curl -sf -X POST "${{ vars.KFDB_URL || 'http://34.60.37.158' }}/api/v1/write" \
+            -H "Authorization: Bearer ${{ secrets.KFDB_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/product-copilot-payload.json \
+            && echo "::notice::KFDB MCPServer entity updated" \
+            || echo "::warning::KFDB entity update failed (non-blocking; gateway picks up on next sync)"
+
+      - name: Sync server in MCP gateway (instant single-entity refresh)
+        if: steps.publish.outcome == 'success'
+        run: |
+          MCP_GW="${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}"
+          RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/health/reload/c7b40daf-dfd0-5780-8797-4e50c939be25" \
+            -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
+            -H "Content-Type: application/json" || echo '{"error":"sync failed"}')
+          echo "Gateway sync: $RESPONSE"
+          echo "$RESPONSE" | grep -q '"updated"' \
+            && echo "::notice::MCP gateway synced product-copilot-mcp v${{ steps.ver.outputs.version }}" \
+            || echo "::warning::gateway single-server sync failed (will pick up on next cycle)"
+
       - name: Commit version bump
         if: steps.publish.outcome == 'success' && inputs.skip_version_bump != true
         run: |

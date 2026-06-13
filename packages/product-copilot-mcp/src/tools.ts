@@ -2,8 +2,11 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { readConfiguredFeedText } from './config.js';
 import {
   findItem,
+  getHumanApprovalBlockers,
+  getMomTestEvidenceGaps,
   getQualityGates,
   getReleaseReadiness,
+  getTopPriorityItem,
   listItems,
   parseFeed,
 } from './feed.js';
@@ -13,7 +16,12 @@ export const TOOL_NAMES = [
   'get_priority_item',
   'get_release_readiness',
   'get_quality_gates',
+  'get_top_priority_item',
+  'get_mom_test_evidence_gaps',
+  'get_human_approval_blockers',
 ] as const;
+
+const SCOPE_DESCRIPTION = "Scope can be 'global', 'product-copilot-release', a repo name, or a surface name.";
 
 export const TOOL_DEFS: Tool[] = [
   {
@@ -52,6 +60,38 @@ export const TOOL_DEFS: Tool[] = [
     name: 'get_quality_gates',
     description: 'Return the Product Copilot release quality gates: commands, screenshot views, changelog, leak gate, and HIL approval.',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_top_priority_item',
+    description: 'Return the highest-priority item for a scope, with a short explanation suitable for deciding what to work on next.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', description: SCOPE_DESCRIPTION },
+      },
+    },
+  },
+  {
+    name: 'get_mom_test_evidence_gaps',
+    description: 'Group missing Mom Test / discovery evidence by evidence type and list the priority items blocked by each gap.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', description: SCOPE_DESCRIPTION },
+        limit: { type: 'number', description: 'Max items per evidence gap (default 20, max 100).' },
+      },
+    },
+  },
+  {
+    name: 'get_human_approval_blockers',
+    description: 'List priority items that need human review, evidence, or approval before automation/release work proceeds.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', description: SCOPE_DESCRIPTION },
+        limit: { type: 'number', description: 'Max blockers (default 20, max 100).' },
+      },
+    },
   },
 ];
 
@@ -98,6 +138,36 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
     }
     case 'get_quality_gates':
       return getQualityGates();
+    case 'get_top_priority_item': {
+      const loaded = await loadFeed();
+      return {
+        source: loaded.source,
+        generatedAt: loaded.feed.generatedAt,
+        ...getTopPriorityItem(loaded.feed.items, { scope: args.scope as string | undefined }),
+      };
+    }
+    case 'get_mom_test_evidence_gaps': {
+      const loaded = await loadFeed();
+      return {
+        source: loaded.source,
+        generatedAt: loaded.feed.generatedAt,
+        ...getMomTestEvidenceGaps(loaded.feed.items, {
+          scope: args.scope as string | undefined,
+          limit: typeof args.limit === 'number' ? args.limit : undefined,
+        }),
+      };
+    }
+    case 'get_human_approval_blockers': {
+      const loaded = await loadFeed();
+      return {
+        source: loaded.source,
+        generatedAt: loaded.feed.generatedAt,
+        ...getHumanApprovalBlockers(loaded.feed.items, {
+          scope: args.scope as string | undefined,
+          limit: typeof args.limit === 'number' ? args.limit : undefined,
+        }),
+      };
+    }
     default:
       return { error: `Unknown tool: ${name}` };
   }
