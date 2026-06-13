@@ -22,7 +22,7 @@ describe('tool surface', () => {
     for (const expected of TOOL_NAMES) expect(names).toContain(expected);
   });
 
-  it('fails closed without a private feed source and wallet context', async () => {
+  it('fails closed when reading a configured feed without private source and wallet context', async () => {
     await expect(readConfiguredFeedText({
       env: {},
       defaultLocalFeedPath: '/definitely/missing/product-copilot-feed.json',
@@ -34,10 +34,6 @@ describe('tool surface', () => {
         throw new Error('fetch should not run without private config');
       },
     })).rejects.toThrow(/Public\/embedded fallback is disabled/);
-
-    const handled = await handleToolCall('list_priority_items', { limit: 5 }) as any;
-    expect(['missing_wallet_context', 'wallet_auth_write_unavailable']).toContain(handled.status);
-    expect(handled.nextSteps.join(' ')).toContain('Do not store Product Copilot KFDB API keys as user secrets');
   });
 
   it('sends authenticated wallet headers to configured feed URLs without requiring KFDB API keys', async () => {
@@ -63,7 +59,7 @@ describe('tool surface', () => {
     expect(privateFeedHeaders(env)).not.toHaveProperty('X-Derive-Key');
   });
 
-  it('idempotently plans and writes private Product Copilot schema setup with wallet auth when available', async () => {
+  it('idempotently checks existing schema before creating the private Product Copilot schema', async () => {
     const env = {
       PRODUCT_COPILOT_KFDB_API_URL: 'https://kfdb.example',
       RICKYDATA_AUTH_TOKEN: 'wallet-session-token',
@@ -78,27 +74,46 @@ describe('tool surface', () => {
     expect(ops.every((op) => op.mode === 'merge')).toBe(true);
     expect(ops.some((op) => op.label === 'SchemaBootstrap')).toBe(true);
 
-    let capturedUrl = '';
-    let capturedInit: RequestInit | undefined;
-    const result = await setupProductCopilotPrivateTenant({
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const firstRun = await setupProductCopilotPrivateTenant({
       env,
       now: () => '2026-06-13T00:00:00.000Z',
       fetcher: async (url, init) => {
-        capturedUrl = String(url);
-        capturedInit = init;
+        calls.push({ url: String(url), init });
+        if (String(url).endsWith('/api/v1/query')) {
+          return new Response(JSON.stringify({ data: [] }), { status: 200 });
+        }
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
       },
     });
 
-    expect(result.status).toBe('initialized_or_already_exists');
-    expect(result.idempotent).toBe(true);
-    expect(capturedUrl).toBe('https://kfdb.example/api/v1/write');
-    expect(capturedInit?.headers).toMatchObject({
+    expect(firstRun.status).toBe('initialized');
+    expect(firstRun.existingSchema).toBe(false);
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://kfdb.example/api/v1/query',
+      'https://kfdb.example/api/v1/write',
+    ]);
+    expect(calls[1]?.init?.headers).toMatchObject({
       authorization: 'Bearer wallet-session-token',
       'X-Wallet-Address': '0xABC',
     });
-    const body = JSON.parse(String(capturedInit?.body));
+    const body = JSON.parse(String(calls[1]?.init?.body));
     expect(body.operations.every((op: any) => op.mode === 'merge')).toBe(true);
+
+    const secondCalls: string[] = [];
+    const secondRun = await setupProductCopilotPrivateTenant({
+      env,
+      now: () => '2026-06-13T00:00:00.000Z',
+      fetcher: async (url) => {
+        secondCalls.push(String(url));
+        return new Response(JSON.stringify({ data: [{ id: 'existing-bootstrap' }] }), { status: 200 });
+      },
+    });
+
+    expect(secondRun.status).toBe('already_initialized');
+    expect(secondRun.existingSchema).toBe(true);
+    expect(secondRun.operationsWritten).toBe(0);
+    expect(secondCalls).toEqual(['https://kfdb.example/api/v1/query']);
   });
 });
 

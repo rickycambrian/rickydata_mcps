@@ -18,15 +18,27 @@ export interface SetupProductCopilotOptions {
   schemaVersion?: string;
 }
 
+export interface TenantSchemaIds {
+  wallet: string;
+  tenantId: string;
+  schemaId: string;
+  bootstrapId: string;
+  tenantSchemaEdgeId: string;
+  bootstrapSchemaEdgeId: string;
+}
+
 export interface SetupStatus {
   ok: boolean;
-  status: 'missing_wallet_context' | 'wallet_auth_write_unavailable' | 'dry_run' | 'initialized_or_already_exists';
+  status: 'missing_wallet_context' | 'wallet_auth_write_unavailable' | 'dry_run' | 'initialized' | 'already_initialized' | 'initialized_or_already_exists';
   appId: string;
   schemaVersion: string;
   idempotent: true;
   missingContext?: string[];
   feedConfigured: boolean;
+  existingSchema?: boolean;
   operationsPlanned?: number;
+  operationsWritten?: number;
+  ids?: TenantSchemaIds;
   labels?: string[];
   edges?: string[];
   proof?: string[];
@@ -66,14 +78,24 @@ export function resolvePrivateTenantConfig(env: Record<string, string | undefine
   };
 }
 
-export function productCopilotSchemaOperations(config: PrivateTenantConfig, opts: { now: string; schemaVersion?: string }): Array<Record<string, unknown>> {
-  const schemaVersion = opts.schemaVersion ?? PRODUCT_COPILOT_SCHEMA_VERSION;
-  const wallet = config.walletAddress.toLowerCase();
+export function productCopilotSchemaIds(walletAddress: string, schemaVersion = PRODUCT_COPILOT_SCHEMA_VERSION): TenantSchemaIds {
+  const wallet = walletAddress.toLowerCase();
   const tenantId = uuidV5(`wallet-tenant:${wallet}`, PRODUCT_COPILOT_SCHEMA_NAMESPACE);
   const schemaId = uuidV5(`schema:${PRODUCT_COPILOT_APP_ID}:${schemaVersion}`, PRODUCT_COPILOT_SCHEMA_NAMESPACE);
   const bootstrapId = uuidV5(`bootstrap:${wallet}:${PRODUCT_COPILOT_APP_ID}:${schemaVersion}`, PRODUCT_COPILOT_SCHEMA_NAMESPACE);
-  const tenantSchemaEdgeId = uuidV5(`edge:${tenantId}:HAS_SCHEMA_BOOTSTRAP:${bootstrapId}`, PRODUCT_COPILOT_SCHEMA_NAMESPACE);
-  const bootstrapSchemaEdgeId = uuidV5(`edge:${bootstrapId}:USES_SCHEMA_VERSION:${schemaId}`, PRODUCT_COPILOT_SCHEMA_NAMESPACE);
+  return {
+    wallet,
+    tenantId,
+    schemaId,
+    bootstrapId,
+    tenantSchemaEdgeId: uuidV5(`edge:${tenantId}:HAS_SCHEMA_BOOTSTRAP:${bootstrapId}`, PRODUCT_COPILOT_SCHEMA_NAMESPACE),
+    bootstrapSchemaEdgeId: uuidV5(`edge:${bootstrapId}:USES_SCHEMA_VERSION:${schemaId}`, PRODUCT_COPILOT_SCHEMA_NAMESPACE),
+  };
+}
+
+export function productCopilotSchemaOperations(config: PrivateTenantConfig, opts: { now: string; schemaVersion?: string }): Array<Record<string, unknown>> {
+  const schemaVersion = opts.schemaVersion ?? PRODUCT_COPILOT_SCHEMA_VERSION;
+  const ids = productCopilotSchemaIds(config.walletAddress, schemaVersion);
   const labels = [
     'WalletTenant',
     'AppSchemaVersion',
@@ -88,10 +110,10 @@ export function productCopilotSchemaOperations(config: PrivateTenantConfig, opts
     {
       operation: 'create_node',
       mode: 'merge',
-      id: tenantId,
+      id: ids.tenantId,
       label: 'WalletTenant',
       properties: {
-        wallet_address: kfStr(wallet),
+        wallet_address: kfStr(ids.wallet),
         private_tenant: kfBool(true),
         updated_at: kfStr(opts.now),
       },
@@ -99,7 +121,7 @@ export function productCopilotSchemaOperations(config: PrivateTenantConfig, opts
     {
       operation: 'create_node',
       mode: 'merge',
-      id: schemaId,
+      id: ids.schemaId,
       label: 'AppSchemaVersion',
       properties: {
         app_id: kfStr(PRODUCT_COPILOT_APP_ID),
@@ -113,13 +135,13 @@ export function productCopilotSchemaOperations(config: PrivateTenantConfig, opts
     {
       operation: 'create_node',
       mode: 'merge',
-      id: bootstrapId,
+      id: ids.bootstrapId,
       label: 'SchemaBootstrap',
       properties: {
         app_id: kfStr(PRODUCT_COPILOT_APP_ID),
         schema_version: kfStr(schemaVersion),
-        wallet_address: kfStr(wallet),
-        idempotency_key: kfStr(`${wallet}:${PRODUCT_COPILOT_APP_ID}:${schemaVersion}`),
+        wallet_address: kfStr(ids.wallet),
+        idempotency_key: kfStr(`${ids.wallet}:${PRODUCT_COPILOT_APP_ID}:${schemaVersion}`),
         status: kfStr('initialized'),
         initialized_at: kfStr(opts.now),
       },
@@ -127,22 +149,71 @@ export function productCopilotSchemaOperations(config: PrivateTenantConfig, opts
     {
       operation: 'create_edge',
       mode: 'merge',
-      id: tenantSchemaEdgeId,
-      from: tenantId,
-      to: bootstrapId,
+      id: ids.tenantSchemaEdgeId,
+      from: ids.tenantId,
+      to: ids.bootstrapId,
       edge_type: 'HAS_SCHEMA_BOOTSTRAP',
       properties: { app_id: kfStr(PRODUCT_COPILOT_APP_ID) },
     },
     {
       operation: 'create_edge',
       mode: 'merge',
-      id: bootstrapSchemaEdgeId,
-      from: bootstrapId,
-      to: schemaId,
+      id: ids.bootstrapSchemaEdgeId,
+      from: ids.bootstrapId,
+      to: ids.schemaId,
       edge_type: 'USES_SCHEMA_VERSION',
       properties: { app_id: kfStr(PRODUCT_COPILOT_APP_ID) },
     },
   ];
+}
+
+function privateTenantHeaders(config: PrivateTenantConfig): HeadersInit {
+  return {
+    'content-type': 'application/json',
+    authorization: `Bearer ${config.authToken}`,
+    'X-Wallet-Address': config.walletAddress,
+  };
+}
+
+function extractRows(payload: unknown): unknown[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const obj = payload as Record<string, unknown>;
+  if (Array.isArray(obj.rows)) return obj.rows;
+  if (Array.isArray(obj.data)) return obj.data;
+  const result = obj.result;
+  if (result && typeof result === 'object') {
+    const nested = result as Record<string, unknown>;
+    if (Array.isArray(nested.rows)) return nested.rows;
+    if (Array.isArray(nested.data)) return nested.data;
+  }
+  return [];
+}
+
+export async function productCopilotSchemaExists(
+  config: PrivateTenantConfig,
+  opts: { fetcher?: typeof fetch; schemaVersion?: string } = {},
+): Promise<boolean> {
+  if (!config.baseUrl || !config.authToken) return false;
+  const ids = productCopilotSchemaIds(config.walletAddress, opts.schemaVersion ?? PRODUCT_COPILOT_SCHEMA_VERSION);
+  const fetcher = opts.fetcher ?? fetch;
+  const base = config.baseUrl.replace(/\/$/, '');
+  const query = `MATCH (b:SchemaBootstrap) WHERE b.id = '${ids.bootstrapId}' RETURN b.id LIMIT 1`;
+  const res = await fetcher(`${base}/api/v1/query`, {
+    method: 'POST',
+    headers: privateTenantHeaders(config),
+    body: JSON.stringify({ query }),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Product Copilot private schema check failed: ${res.status} ${text.slice(0, 300)}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = {};
+  }
+  return extractRows(parsed).length > 0;
 }
 
 export function privateSetupGuidance(error?: unknown, env: Record<string, string | undefined> = process.env): SetupStatus {
@@ -158,9 +229,9 @@ export function privateSetupGuidance(error?: unknown, env: Record<string, string
     proof: error instanceof Error ? [`blocked_before_private_read: ${error.message}`] : undefined,
     nextSteps: resolved.config
       ? [
-        'Gateway provided wallet context; configure a wallet-auth private feed/write endpoint for Product Copilot.',
-        'Do not store Product Copilot KFDB API keys as user secrets.',
-        'Do not enable public/shared fallback for Product Copilot user/app data.',
+        'Gateway provided wallet context, but the MCP runtime is missing wallet-auth private tenant read/write capability.',
+        'Forward the logged-in wallet/session token as platform context; do not ask the user to store KFDB/API keys.',
+        'Rerun setup_private_product_copilot; it will check existing schema and only create it if missing.',
       ]
       : [
         'Authenticate through RickyData Gateway / Privy so the MCP receives wallet context automatically.',
@@ -191,6 +262,7 @@ export async function setupProductCopilotPrivateTenant(options: SetupProductCopi
   }
 
   const now = options.now?.() ?? new Date().toISOString();
+  const ids = productCopilotSchemaIds(resolved.config.walletAddress, schemaVersion);
   const operations = productCopilotSchemaOperations(resolved.config, { now, schemaVersion });
   const labels = operations.filter((op) => op.operation === 'create_node').map((op) => String(op.label));
   const edges = operations.filter((op) => op.operation === 'create_edge').map((op) => String(op.edge_type));
@@ -203,29 +275,50 @@ export async function setupProductCopilotPrivateTenant(options: SetupProductCopi
       schemaVersion,
       idempotent: true,
       feedConfigured: resolved.feedConfigured,
+      existingSchema: false,
       operationsPlanned: operations.length,
+      ids,
       labels,
       edges,
       proof: [
-        'planned deterministic merge operations only; no unauthenticated private write performed',
+        'planned deterministic schema ids only; no unauthenticated private write performed',
         `wallet_context_present: ${Boolean(resolved.config.walletAddress)}`,
         `wallet_auth_endpoint_present: ${Boolean(resolved.config.baseUrl && resolved.config.authToken)}`,
       ],
       nextSteps: options.dryRun
         ? ['Run setup_private_product_copilot with dry_run=false after gateway provides wallet-auth KFDB write capability.']
-        : ['Gateway wallet context is present, but wallet-auth KFDB write capability is not yet exposed to this MCP runtime.'],
+        : ['Gateway wallet context is present, but wallet-auth KFDB read/write capability is not yet exposed to this MCP runtime.'],
     };
   }
 
   const fetcher = options.fetcher ?? fetch;
   const base = resolved.config.baseUrl.replace(/\/$/, '');
+  const existing = await productCopilotSchemaExists(resolved.config, { fetcher, schemaVersion });
+  if (existing) {
+    return {
+      ok: true,
+      status: 'already_initialized',
+      appId: PRODUCT_COPILOT_APP_ID,
+      schemaVersion,
+      idempotent: true,
+      feedConfigured: resolved.feedConfigured,
+      existingSchema: true,
+      operationsPlanned: 0,
+      operationsWritten: 0,
+      ids,
+      labels,
+      edges,
+      proof: [
+        'wallet-auth private tenant schema check succeeded',
+        'existing SchemaBootstrap found; no schema write performed',
+      ],
+      nextSteps: ['Private schema already exists for this wallet/app/version; read tools can use existing tenant records.'],
+    };
+  }
+
   const res = await fetcher(`${base}/api/v1/write`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${resolved.config.authToken}`,
-      'X-Wallet-Address': resolved.config.walletAddress,
-    },
+    headers: privateTenantHeaders(resolved.config),
     body: JSON.stringify({ operations }),
   });
   const text = await res.text();
@@ -235,21 +328,22 @@ export async function setupProductCopilotPrivateTenant(options: SetupProductCopi
 
   return {
     ok: true,
-    status: 'initialized_or_already_exists',
+    status: 'initialized',
     appId: PRODUCT_COPILOT_APP_ID,
     schemaVersion,
     idempotent: true,
     feedConfigured: resolved.feedConfigured,
+    existingSchema: false,
     operationsPlanned: operations.length,
+    operationsWritten: operations.length,
+    ids,
     labels,
     edges,
     proof: [
       'wallet-auth private tenant headers were sent with values redacted',
-      'deterministic merge ids make reruns safe when schema already exists',
+      'schema was absent before setup, so deterministic merge operations were written once',
       `kfdb_write_status: ${res.status}`,
     ],
-    nextSteps: resolved.feedConfigured
-      ? ['Private schema is initialized; read tools can now use the configured private HIL feed.']
-      : ['Private schema is initialized; configure a wallet-auth private Product Copilot feed endpoint before using feed read tools.'],
+    nextSteps: ['Private schema is initialized; future runs check and reuse this schema before reading/writing Product Copilot records.'],
   };
 }
