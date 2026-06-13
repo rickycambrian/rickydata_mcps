@@ -8,6 +8,7 @@ This MCP is the product-specific complement to the local/admin KFDB tooling. It 
 
 | Tool | Purpose |
 |---|---|
+| `setup_private_product_copilot` | Idempotently initialize/verify the active wallet private tenant schema. Safe to rerun; creates deterministic merge records only if missing. |
 | `list_priority_items` | Read top HIL roadmap/feed items from the Product Copilot PM feed. |
 | `get_priority_item` | Fetch one item by repo + issue number or URL. |
 | `get_release_readiness` | Summarize Product Copilot release readiness, blockers, and source/public repo pairing. |
@@ -22,13 +23,17 @@ Required private configuration:
 
 | Env var | Purpose |
 |---|---|
+| `PRODUCT_COPILOT_KFDB_API_URL` / `KFDB_API_URL` | Private KFDB endpoint used by `setup_private_product_copilot`. |
+| `PRODUCT_COPILOT_KFDB_API_KEY` / `RICKYDATA_KFDB_API_KEY` / `KFDB_API_KEY` | Service bearer for private tenant schema setup. Not sufficient without derive headers. |
 | `PRODUCT_COPILOT_PM_REPORT_URL` or `PRODUCT_COPILOT_PM_REPORT_PATH` | Private HIL feed source. No embedded/public fallback exists. |
 | `PRODUCT_COPILOT_WALLET_ADDRESS` or `RICKYDATA_KFDB_WALLET_ADDRESS` | Active wallet owner for the private tenant. |
 | `PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID` or `RICKYDATA_KFDB_DERIVE_SESSION_ID` | Active sign-to-derive session id. |
 | `PRODUCT_COPILOT_KFDB_DERIVE_KEY` or `RICKYDATA_KFDB_DERIVE_KEY` | Active wallet-derived key. |
 | `PRODUCT_COPILOT_PM_REPORT_BEARER_TOKEN` / `RICKYDATA_KFDB_API_KEY` / `KFDB_API_KEY` | Optional service bearer for the private feed endpoint. |
 
-The URL fetch path sends `X-Wallet-Address`, `X-Derive-Session-Id`, and `X-Derive-Key` headers. If the source or derive material is missing, the MCP refuses to start/read rather than serving shared data.
+The URL fetch path sends `X-Wallet-Address`, `X-Derive-Session-Id`, and `X-Derive-Key` headers. If the source or derive material is missing, read tools return a structured `missing_private_tenant_config` response that points the agent at `setup_private_product_copilot` instead of throwing a generic MCP internal error.
+
+`setup_private_product_copilot` writes deterministic `mode: "merge"` KFDB operations for `WalletTenant`, `AppSchemaVersion`, and `SchemaBootstrap`, so rerunning it after the schema already exists leaves the tenant alone and reports `initialized_or_already_exists`.
 
 ## Usage
 

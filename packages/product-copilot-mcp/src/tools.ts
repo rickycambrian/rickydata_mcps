@@ -10,8 +10,10 @@ import {
   listItems,
   parseFeed,
 } from './feed.js';
+import { privateSetupGuidance, setupProductCopilotPrivateTenant } from './setup.js';
 
 export const TOOL_NAMES = [
+  'setup_private_product_copilot',
   'list_priority_items',
   'get_priority_item',
   'get_release_readiness',
@@ -24,6 +26,17 @@ export const TOOL_NAMES = [
 const SCOPE_DESCRIPTION = "Scope can be 'global', 'product-copilot-release', a repo name, or a surface name.";
 
 export const TOOL_DEFS: Tool[] = [
+  {
+    name: 'setup_private_product_copilot',
+    description: 'Idempotently initialize or verify the active wallet private tenant schema for Product Copilot. Safe to run repeatedly; creates deterministic merge records if missing and leaves existing schema alone.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dry_run: { type: 'boolean', description: 'When true, validate config and show planned schema operations without writing.' },
+        schema_version: { type: 'string', description: 'Optional schema version override; defaults to the current Product Copilot schema version.' },
+      },
+    },
+  },
   {
     name: 'list_priority_items',
     description: 'List Product Copilot / rickydata HIL priority feed items, sorted by score, with optional repo/surface/mismatch filters.',
@@ -100,8 +113,19 @@ async function loadFeed() {
   return parseFeed(text, source);
 }
 
+function isPrivateFeedSetupError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /Product Copilot private feed|PM private feed URL|wallet sign-to-derive|private feed path/.test(err.message);
+}
+
 export async function handleToolCall(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
-  switch (name) {
+  try {
+    switch (name) {
+      case 'setup_private_product_copilot':
+        return setupProductCopilotPrivateTenant({
+          dryRun: args.dry_run === true,
+          schemaVersion: typeof args.schema_version === 'string' ? args.schema_version : undefined,
+        });
     case 'list_priority_items': {
       const loaded = await loadFeed();
       const items = listItems(loaded.feed.items, {
@@ -168,7 +192,13 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
         }),
       };
     }
-    default:
-      return { error: `Unknown tool: ${name}` };
+      default:
+        return { error: `Unknown tool: ${name}` };
+    }
+  } catch (err) {
+    if (isPrivateFeedSetupError(err)) {
+      return privateSetupGuidance(err);
+    }
+    throw err;
   }
 }

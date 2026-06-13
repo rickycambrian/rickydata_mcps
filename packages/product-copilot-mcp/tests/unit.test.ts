@@ -11,12 +11,13 @@ import {
   type PriorityItem,
 } from '../src/feed.js';
 import { privateFeedHeaders, readConfiguredFeedText } from '../src/config.js';
-import { TOOL_DEFS, TOOL_NAMES } from '../src/tools.js';
+import { TOOL_DEFS, TOOL_NAMES, handleToolCall } from '../src/tools.js';
+import { setupProductCopilotPrivateTenant, productCopilotSchemaOperations } from '../src/setup.js';
 
 describe('tool surface', () => {
   it('exposes the documented Product Copilot tools with unique names', () => {
     const names = TOOL_DEFS.map((tool) => tool.name);
-    expect(names).toHaveLength(7);
+    expect(names).toHaveLength(8);
     expect(new Set(names).size).toBe(names.length);
     for (const expected of TOOL_NAMES) expect(names).toContain(expected);
   });
@@ -33,6 +34,10 @@ describe('tool surface', () => {
         throw new Error('fetch should not run without private config');
       },
     })).rejects.toThrow(/Public\/embedded fallback is disabled/);
+
+    const handled = await handleToolCall('list_priority_items', { limit: 5 }) as any;
+    expect(handled.status).toBe('missing_private_tenant_config');
+    expect(handled.nextSteps.join(' ')).toContain('setup_private_product_copilot');
   });
 
   it('sends private wallet derive headers to configured feed URLs', async () => {
@@ -60,6 +65,50 @@ describe('tool surface', () => {
       'X-Derive-Key': 'derive-key',
     });
     expect(privateFeedHeaders(env)['X-Derive-Key']).toBe('derive-key');
+  });
+
+  it('idempotently plans and writes private Product Copilot schema setup', async () => {
+    const env = {
+      PRODUCT_COPILOT_KFDB_API_URL: 'https://kfdb.example',
+      PRODUCT_COPILOT_KFDB_API_KEY: 'test-api-key',
+      PRODUCT_COPILOT_WALLET_ADDRESS: '0xABC',
+      PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID: 'derive-session',
+      PRODUCT_COPILOT_KFDB_DERIVE_KEY: 'derive-key',
+    };
+    const ops = productCopilotSchemaOperations({
+      baseUrl: env.PRODUCT_COPILOT_KFDB_API_URL,
+      apiKey: env.PRODUCT_COPILOT_KFDB_API_KEY,
+      walletAddress: env.PRODUCT_COPILOT_WALLET_ADDRESS,
+      deriveSessionId: env.PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID,
+      deriveKey: env.PRODUCT_COPILOT_KFDB_DERIVE_KEY,
+    }, { now: '2026-06-13T00:00:00.000Z' });
+    expect(ops).toHaveLength(5);
+    expect(ops.every((op) => op.mode === 'merge')).toBe(true);
+    expect(ops.some((op) => op.label === 'SchemaBootstrap')).toBe(true);
+
+    let capturedUrl = '';
+    let capturedInit: RequestInit | undefined;
+    const result = await setupProductCopilotPrivateTenant({
+      env,
+      now: () => '2026-06-13T00:00:00.000Z',
+      fetcher: async (url, init) => {
+        capturedUrl = String(url);
+        capturedInit = init;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+    });
+
+    expect(result.status).toBe('initialized_or_already_exists');
+    expect(result.idempotent).toBe(true);
+    expect(capturedUrl).toBe('https://kfdb.example/api/v1/write');
+    expect(capturedInit?.headers).toMatchObject({
+      authorization: 'Bearer test-api-key',
+      'X-Wallet-Address': '0xABC',
+      'X-Derive-Session-Id': 'derive-session',
+      'X-Derive-Key': 'derive-key',
+    });
+    const body = JSON.parse(String(capturedInit?.body));
+    expect(body.operations.every((op: any) => op.mode === 'merge')).toBe(true);
   });
 });
 
