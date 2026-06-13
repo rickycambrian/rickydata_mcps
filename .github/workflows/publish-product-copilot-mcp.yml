@@ -57,8 +57,8 @@ jobs:
           )
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
           echo "::notice::product-copilot-mcp exposes $COUNT tools"
-          if [ "$COUNT" -ne 7 ]; then
-            echo "::error::Expected exactly 7 Product Copilot tools, got $COUNT"
+          if [ "$COUNT" -ne 8 ]; then
+            echo "::error::Expected exactly 8 Product Copilot tools, got $COUNT"
             exit 1
           fi
 
@@ -106,16 +106,30 @@ jobs:
             const fs=require('fs');
             const tools=JSON.parse(fs.readFileSync('/tmp/tools_available.json','utf8'));
             const v='${{ steps.ver.outputs.version }}';
+            const requiredEnvVars=[
+              'PRODUCT_COPILOT_KFDB_API_URL',
+              'PRODUCT_COPILOT_KFDB_API_KEY',
+              'PRODUCT_COPILOT_WALLET_ADDRESS',
+              'PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID',
+              'PRODUCT_COPILOT_KFDB_DERIVE_KEY',
+              'PRODUCT_COPILOT_PM_REPORT_URL'
+            ];
+            const secretsRequired=[
+              {name:'PRODUCT_COPILOT_KFDB_API_KEY',description:'Private KFDB service bearer; not sufficient without wallet derive headers.',required:true},
+              {name:'PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID',description:'Active wallet sign-to-derive session id for the private tenant.',required:true},
+              {name:'PRODUCT_COPILOT_KFDB_DERIVE_KEY',description:'Active wallet-derived private tenant key.',required:true}
+            ];
             const properties={
               name:{String:'@rickydata/product-copilot-mcp'}, title:{String:'Product Copilot MCP'},
-              description:{String:'Read-only Product Copilot roadmap, release-readiness, screenshot-gate, Mom Test evidence, and human-approval blocker tools.'},
+              description:{String:'Private-only Product Copilot roadmap, release-readiness, private tenant setup, screenshot-gate, Mom Test evidence, and human-approval blocker tools.'},
               registry_type:{String:'npm'}, version:{String:v}, latest_version:{String:v},
               tools_count:{Integer:tools.length}, tools_available:{String:JSON.stringify(tools)},
               install_command:{String:'npx -y @rickydata/product-copilot-mcp@'+v},
               run_command:{String:'npx -y @rickydata/product-copilot-mcp@'+v},
               transport_type:{String:'stdio'}, gateway_compatible:{Boolean:true}, gateway_safe:{Boolean:true},
-              requires_auth:{Boolean:false}, required_env_vars:{String:JSON.stringify([])}, secrets_required:{String:JSON.stringify([])},
-              enriched_at:{String:new Date().toISOString()}, enrichment_version:{Integer:5},
+              requires_auth:{Boolean:true}, required_env_vars:{String:JSON.stringify(requiredEnvVars)}, secrets_required:{String:JSON.stringify(secretsRequired)},
+              credential_binding:{String:'private_tenant_sign_to_derive'}, sharing_policy:{String:'private_tenant_only'},
+              enriched_at:{String:new Date().toISOString()}, enrichment_version:{Integer:6},
             };
             const id='7b00f8f8-afdd-402d-9d3f-5ee8a979ec98';
             fs.writeFileSync('/tmp/product-copilot-update.json', JSON.stringify({operations:[{operation:'update_node',id,label:'MCPServer',properties}]}));
