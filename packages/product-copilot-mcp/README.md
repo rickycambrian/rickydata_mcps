@@ -12,17 +12,20 @@ This is the public-consumer-facing complement to the local/admin KFDB MCP toolin
 | `get_priority_item` | Fetch one item by repo + issue number or URL. |
 | `get_release_readiness` | Summarize Product Copilot release readiness, blockers, and source/public repo pairing. |
 | `get_quality_gates` | Return the required tests, screenshot proof, changelog, leak gate, and HIL approval gates. |
+| `get_top_priority_item` | Return the highest-priority item for a scope, with explanation. |
+| `get_mom_test_evidence_gaps` | Group missing Mom Test / discovery evidence by evidence type. |
+| `get_human_approval_blockers` | List items that need human review, evidence, or approval before automation/release work proceeds. |
 
 ## Data source
 
-Set exactly one of:
+Optional overrides:
 
 | Env var | Purpose |
 |---|---|
 | `PRODUCT_COPILOT_PM_REPORT_PATH` | Local/internal path to `human-in-loop-roadmap-feed.json`. |
 | `PRODUCT_COPILOT_PM_REPORT_URL` | Public/API URL returning the same JSON shape. |
 
-If neither is set, local development falls back to Ricky's internal default path under `/root/projects/rickycambrian/rickydata_sales_coach` when present.
+If neither is set, local development falls back to Ricky's internal default path under `/root/projects/rickycambrian/rickydata_sales_coach` when present. Public gateway/runtime execution falls back to the embedded public Product Copilot feed packaged with the MCP, so users do **not** need to store `PRODUCT_COPILOT_PM_REPORT_URL` as a per-wallet secret.
 
 ## Usage
 
@@ -30,7 +33,7 @@ If neither is set, local development falls back to Ricky's internal default path
 npx -y @rickydata/product-copilot-mcp
 ```
 
-Hermes/Claude Desktop style config:
+Hermes/Claude Desktop style config with an optional live feed override:
 
 ```json
 {
@@ -48,7 +51,7 @@ Hermes/Claude Desktop style config:
 
 ## Auth model
 
-The MCP itself does not require an admin KFDB API key. In production it should run behind the RickyData MCP Gateway. The website/user flow should authenticate with wallet sign-to-derive or a gateway wallet token (`mcpwt_...`), then the gateway can route calls to this server with user-scoped context.
+The MCP itself does not require an admin KFDB API key or per-user feed URL secret. In production it runs behind the RickyData MCP Gateway. The website/user flow authenticates with wallet sign-to-derive or a gateway wallet token (`mcpwt_...`), then the gateway can route calls to this server with user-scoped context. `PRODUCT_COPILOT_PM_REPORT_URL` remains only an operator/deployment override for replacing the embedded feed with a live API endpoint.
 
 ## Development
 

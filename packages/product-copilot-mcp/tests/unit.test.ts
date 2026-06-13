@@ -10,6 +10,7 @@ import {
   parseFeed,
   type PriorityItem,
 } from '../src/feed.js';
+import { readConfiguredFeedText } from '../src/config.js';
 import { TOOL_DEFS, TOOL_NAMES } from '../src/tools.js';
 
 describe('tool surface', () => {
@@ -18,6 +19,23 @@ describe('tool surface', () => {
     expect(names).toHaveLength(7);
     expect(new Set(names).size).toBe(names.length);
     for (const expected of TOOL_NAMES) expect(names).toContain(expected);
+  });
+
+  it('falls back to an embedded public feed without requiring per-wallet secrets', async () => {
+    const loaded = await readConfiguredFeedText({
+      env: {},
+      defaultLocalFeedPath: '/definitely/missing/product-copilot-feed.json',
+      localFeedExists: () => false,
+      readFile: async () => {
+        throw new Error('readFile should not run for embedded fallback');
+      },
+      fetcher: async () => {
+        throw new Error('fetch should not run without an explicit URL');
+      },
+    });
+
+    expect(loaded.source).toBe('embedded:product-copilot-public-feed');
+    expect(JSON.parse(loaded.text).items.length).toBeGreaterThan(0);
   });
 });
 
