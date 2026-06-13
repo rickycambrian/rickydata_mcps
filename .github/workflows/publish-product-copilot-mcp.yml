@@ -1,0 +1,124 @@
+name: Publish product-copilot-mcp
+
+on:
+  push:
+    paths: ['packages/product-copilot-mcp/package.json']
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_version_bump:
+        description: 'Skip version bump (publish current version)'
+        required: false
+        default: 'false'
+        type: boolean
+
+concurrency:
+  group: publish-product-copilot-mcp-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Ensure Linux rollup binary (npm optional-deps bug workaround)
+        run: |
+          ROLLUP_VERSION=$(node -p "require('rollup/package.json').version")
+          npm install --no-save --no-audit --no-fund \
+            "@rollup/rollup-linux-x64-gnu@${ROLLUP_VERSION}"
+
+      - name: Build
+        run: npm run build --workspace @rickydata/product-copilot-mcp
+
+      - name: Test
+        run: npm run test --workspace @rickydata/product-copilot-mcp
+
+      - name: Verify tool count from package exports
+        id: tools
+        run: |
+          COUNT=$(node --input-type=module - <<'NODE'
+          import { TOOL_DEFS } from './packages/product-copilot-mcp/dist/tools.js';
+          console.log(TOOL_DEFS.length);
+          NODE
+          )
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "::notice::product-copilot-mcp exposes $COUNT tools"
+          if [ "$COUNT" -lt 4 ]; then
+            echo "::error::Expected at least 4 tools, got $COUNT"
+            exit 1
+          fi
+
+      - name: Bump patch version
+        if: inputs.skip_version_bump != 'true'
+        run: npm version patch --no-git-tag-version --workspace @rickydata/product-copilot-mcp
+
+      - name: Capture version
+        id: ver
+        run: |
+          VERSION=$(node -p "require('./packages/product-copilot-mcp/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already published
+        id: check
+        run: |
+          if npm view "@rickydata/product-copilot-mcp@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::@rickydata/product-copilot-mcp@${{ steps.ver.outputs.version }} already on npm; skipping publish"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        id: publish
+        if: steps.check.outputs.exists == 'false'
+        working-directory: packages/product-copilot-mcp
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
+
+      - name: Commit version bump
+        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != 'true'
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          node -e "
+            const fs = require('fs');
+            const p = require('./packages/product-copilot-mcp/package.json');
+            p.version = '${{ steps.ver.outputs.version }}';
+            fs.writeFileSync('./packages/product-copilot-mcp/package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+          git add packages/product-copilot-mcp/package.json
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(product-copilot-mcp): publish v${{ steps.ver.outputs.version }}"
+            for i in 1 2 3; do
+              git push && break
+              git pull --rebase origin main
+            done
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## product-copilot-mcp Publish Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version**: ${{ steps.ver.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Tools**: ${{ steps.tools.outputs.count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Already on npm**: ${{ steps.check.outputs.exists }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Publish**: ${{ steps.publish.outcome || 'skipped' }}" >> "$GITHUB_STEP_SUMMARY"

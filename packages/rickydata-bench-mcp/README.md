@@ -27,6 +27,23 @@ leaderboards, per-task comparisons, and the (gold-redacted) task catalog.
 | `RESPONSE_MAX_LENGTH` | `200000` | Whole-response character cap |
 | `TRANSPORT` / `PORT` | `stdio` | `http` to run a Streamable-HTTP server |
 
+## Public consumer boundary
+
+This is the domain-specific public MCP for `rickydata_bench`, not an admin KFDB
+MCP. It should remain safe for normal consumers behind RickyData Gateway
+sign-to-derive / wallet-token auth:
+
+- no admin KFDB API key is required by the package;
+- tools are workflow-oriented and read from public benchmark APIs;
+- gold answers, fix commits, and PR merge metadata are stripped in depth;
+- benchmark execution never imports or depends on this MCP;
+- gateway/user-specific auth should be enforced outside the package by the
+  RickyData MCP Gateway.
+
+Use this server as the reference pattern for Product Copilot and future
+application-specific MCP servers: start narrow, validate real questions, then
+promote repeated successful tool sequences into skills.
+
 ## Usage
 
 ```bash
