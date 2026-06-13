@@ -104,7 +104,7 @@ jobs:
             const fs=require('fs');
             const tools=JSON.parse(fs.readFileSync('/tmp/tools_available.json','utf8'));
             const v='${{ steps.ver.outputs.version }}';
-            const payload={operations:[{operation:'update_node',id:'c7b40daf-dfd0-5780-8797-4e50c939be25',label:'MCPServer',properties:{
+            const properties={
               name:{String:'@rickydata/product-copilot-mcp'}, title:{String:'Product Copilot MCP'},
               description:{String:'Read-only Product Copilot roadmap, release-readiness, screenshot-gate, Mom Test evidence, and human-approval blocker tools.'},
               registry_type:{String:'npm'}, version:{String:v}, latest_version:{String:v},
@@ -114,16 +114,26 @@ jobs:
               transport_type:{String:'stdio'}, gateway_compatible:{Boolean:true}, gateway_safe:{Boolean:true},
               requires_auth:{Boolean:false}, required_env_vars:{String:JSON.stringify(['PRODUCT_COPILOT_PM_REPORT_URL'])},
               enriched_at:{String:new Date().toISOString()}, enrichment_version:{Integer:5},
-            }}]};
-            fs.writeFileSync('/tmp/product-copilot-payload.json', JSON.stringify(payload));
+            };
+            const id='c7b40daf-dfd0-5780-8797-4e50c939be25';
+            fs.writeFileSync('/tmp/product-copilot-update.json', JSON.stringify({operations:[{operation:'update_node',id,label:'MCPServer',properties}]}));
+            fs.writeFileSync('/tmp/product-copilot-create.json', JSON.stringify({operations:[{operation:'create_node',id,label:'MCPServer',properties}]}));
             console.log('KFDB payload: '+tools.length+' tools, v'+v);
           "
-          curl -sf -X POST "${{ vars.KFDB_URL || 'http://34.60.37.158' }}/api/v1/write" \
+          KFDB_URL="${{ vars.KFDB_URL || 'http://34.60.37.158' }}"
+          if curl -sf -X POST "$KFDB_URL/api/v1/write" \
             -H "Authorization: Bearer ${{ secrets.KFDB_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d @/tmp/product-copilot-payload.json \
-            && echo "::notice::KFDB MCPServer entity updated" \
-            || echo "::warning::KFDB entity update failed (non-blocking; gateway picks up on next sync)"
+            -d @/tmp/product-copilot-update.json; then
+            echo "::notice::KFDB MCPServer entity updated"
+          elif curl -sf -X POST "$KFDB_URL/api/v1/write" \
+            -H "Authorization: Bearer ${{ secrets.KFDB_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/product-copilot-create.json; then
+            echo "::notice::KFDB MCPServer entity created"
+          else
+            echo "::warning::KFDB entity create/update failed (non-blocking; gateway picks up on next sync)"
+          fi
 
       - name: Sync server in MCP gateway (instant single-entity refresh)
         if: steps.publish.outcome == 'success'
