@@ -1,8 +1,8 @@
 # @rickydata/product-copilot-mcp
 
-Read-only MCP for **rickydata Product Copilot** roadmap, release-readiness, screenshot gates, and human-in-loop priority review data.
+Private-only MCP for **rickydata Product Copilot** roadmap, release-readiness, screenshot gates, and human-in-loop priority review data.
 
-This is the public-consumer-facing complement to the local/admin KFDB MCP tooling. The admin `kfdb-rickydata` MCP can write/query broad KFDB surfaces with privileged API-key context. This package is intentionally narrower: it exposes product-specific, review-safe tools that can be mounted behind RickyData Gateway sign-to-derive / wallet-token auth for normal users.
+This MCP is the product-specific complement to the local/admin KFDB tooling. It is intentionally narrow, but it is not a public/shared feed: every runtime must be mounted behind RickyData Gateway or another private operator surface that injects the active wallet's sign-to-derive material. Missing wallet-derived headers fail closed instead of falling back to embedded/public data.
 
 ## Tools
 
@@ -18,14 +18,17 @@ This is the public-consumer-facing complement to the local/admin KFDB MCP toolin
 
 ## Data source
 
-Optional overrides:
+Required private configuration:
 
 | Env var | Purpose |
 |---|---|
-| `PRODUCT_COPILOT_PM_REPORT_PATH` | Local/internal path to `human-in-loop-roadmap-feed.json`. |
-| `PRODUCT_COPILOT_PM_REPORT_URL` | Public/API URL returning the same JSON shape. |
+| `PRODUCT_COPILOT_PM_REPORT_URL` or `PRODUCT_COPILOT_PM_REPORT_PATH` | Private HIL feed source. No embedded/public fallback exists. |
+| `PRODUCT_COPILOT_WALLET_ADDRESS` or `RICKYDATA_KFDB_WALLET_ADDRESS` | Active wallet owner for the private tenant. |
+| `PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID` or `RICKYDATA_KFDB_DERIVE_SESSION_ID` | Active sign-to-derive session id. |
+| `PRODUCT_COPILOT_KFDB_DERIVE_KEY` or `RICKYDATA_KFDB_DERIVE_KEY` | Active wallet-derived key. |
+| `PRODUCT_COPILOT_PM_REPORT_BEARER_TOKEN` / `RICKYDATA_KFDB_API_KEY` / `KFDB_API_KEY` | Optional service bearer for the private feed endpoint. |
 
-If neither is set, local development falls back to Ricky's internal default path under `/root/projects/rickycambrian/rickydata_sales_coach` when present. Public gateway/runtime execution falls back to the embedded public Product Copilot feed packaged with the MCP, so users do **not** need to store `PRODUCT_COPILOT_PM_REPORT_URL` as a per-wallet secret.
+The URL fetch path sends `X-Wallet-Address`, `X-Derive-Session-Id`, and `X-Derive-Key` headers. If the source or derive material is missing, the MCP refuses to start/read rather than serving shared data.
 
 ## Usage
 
@@ -33,7 +36,7 @@ If neither is set, local development falls back to Ricky's internal default path
 npx -y @rickydata/product-copilot-mcp
 ```
 
-Hermes/Claude Desktop style config with an optional live feed override:
+Hermes/Claude Desktop style config must be supplied by a private operator/gateway context. Do not put raw values in checked-in config:
 
 ```json
 {
@@ -42,7 +45,10 @@ Hermes/Claude Desktop style config with an optional live feed override:
       "command": "npx",
       "args": ["-y", "@rickydata/product-copilot-mcp"],
       "env": {
-        "PRODUCT_COPILOT_PM_REPORT_URL": "https://<deployment>/api/roadmap/hil-feed"
+        "PRODUCT_COPILOT_PM_REPORT_URL": "https://<private-deployment>/api/roadmap/hil-feed",
+        "PRODUCT_COPILOT_WALLET_ADDRESS": "${RICKYDATA_KFDB_WALLET_ADDRESS}",
+        "PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID": "${RICKYDATA_KFDB_DERIVE_SESSION_ID}",
+        "PRODUCT_COPILOT_KFDB_DERIVE_KEY": "${RICKYDATA_KFDB_DERIVE_KEY}"
       }
     }
   }
@@ -51,7 +57,7 @@ Hermes/Claude Desktop style config with an optional live feed override:
 
 ## Auth model
 
-The MCP itself does not require an admin KFDB API key or per-user feed URL secret. In production it runs behind the RickyData MCP Gateway. The website/user flow authenticates with wallet sign-to-derive or a gateway wallet token (`mcpwt_...`), then the gateway can route calls to this server with user-scoped context. `PRODUCT_COPILOT_PM_REPORT_URL` remains only an operator/deployment override for replacing the embedded feed with a live API endpoint.
+The MCP itself does not use an admin KFDB-only path or a shared embedded feed. Production calls must be routed through RickyData Gateway or a private operator surface that injects the active wallet and sign-to-derive session for the same private tenant used by `rickydata_notes`. This preserves cross-system graph joins across notes, rickydata_git, Hermes sessions, Product Copilot, and Sales Coach without leaking the graph into a public/shared keyspace.
 
 ## Development
 

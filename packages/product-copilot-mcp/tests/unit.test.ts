@@ -10,7 +10,7 @@ import {
   parseFeed,
   type PriorityItem,
 } from '../src/feed.js';
-import { readConfiguredFeedText } from '../src/config.js';
+import { privateFeedHeaders, readConfiguredFeedText } from '../src/config.js';
 import { TOOL_DEFS, TOOL_NAMES } from '../src/tools.js';
 
 describe('tool surface', () => {
@@ -21,21 +21,45 @@ describe('tool surface', () => {
     for (const expected of TOOL_NAMES) expect(names).toContain(expected);
   });
 
-  it('falls back to an embedded public feed without requiring per-wallet secrets', async () => {
-    const loaded = await readConfiguredFeedText({
+  it('fails closed without a private feed source and wallet-derived material', async () => {
+    await expect(readConfiguredFeedText({
       env: {},
       defaultLocalFeedPath: '/definitely/missing/product-copilot-feed.json',
       localFeedExists: () => false,
       readFile: async () => {
-        throw new Error('readFile should not run for embedded fallback');
+        throw new Error('readFile should not run without private config');
       },
       fetcher: async () => {
-        throw new Error('fetch should not run without an explicit URL');
+        throw new Error('fetch should not run without private config');
+      },
+    })).rejects.toThrow(/Public\/embedded fallback is disabled/);
+  });
+
+  it('sends private wallet derive headers to configured feed URLs', async () => {
+    const env = {
+      PRODUCT_COPILOT_PM_REPORT_URL: 'https://private.example/hil-feed',
+      PRODUCT_COPILOT_PM_REPORT_BEARER_TOKEN: 'test-token',
+      PRODUCT_COPILOT_WALLET_ADDRESS: '0xabc',
+      PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID: 'derive-session',
+      PRODUCT_COPILOT_KFDB_DERIVE_KEY: 'derive-key',
+    };
+    let capturedHeaders: HeadersInit | undefined;
+    const loaded = await readConfiguredFeedText({
+      env,
+      fetcher: async (_url, init) => {
+        capturedHeaders = init?.headers;
+        return new Response(JSON.stringify({ generatedAt: 'now', items: [] }), { status: 200 });
       },
     });
 
-    expect(loaded.source).toBe('embedded:product-copilot-public-feed');
-    expect(JSON.parse(loaded.text).items.length).toBeGreaterThan(0);
+    expect(loaded.source).toBe(env.PRODUCT_COPILOT_PM_REPORT_URL);
+    expect(capturedHeaders).toMatchObject({
+      Authorization: 'Bearer test-token',
+      'X-Wallet-Address': '0xabc',
+      'X-Derive-Session-Id': 'derive-session',
+      'X-Derive-Key': 'derive-key',
+    });
+    expect(privateFeedHeaders(env)['X-Derive-Key']).toBe('derive-key');
   });
 });
 
