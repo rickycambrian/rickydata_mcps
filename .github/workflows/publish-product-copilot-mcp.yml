@@ -63,7 +63,7 @@ jobs:
           fi
 
       - name: Bump patch version
-        if: inputs.skip_version_bump != 'true'
+        if: inputs.skip_version_bump != true
         run: npm version patch --no-git-tag-version --workspace @rickydata/product-copilot-mcp
 
       - name: Capture version
@@ -92,7 +92,7 @@ jobs:
           NPM_CONFIG_PROVENANCE: 'true'
 
       - name: Commit version bump
-        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != 'true'
+        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != true
         run: |
           set -e
           git config user.name "github-actions[bot]"

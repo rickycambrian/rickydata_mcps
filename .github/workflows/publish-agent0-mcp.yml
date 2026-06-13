@@ -71,7 +71,7 @@ jobs:
         run: npx vitest run 2>/dev/null || echo "Tests skipped"
 
       - name: Bump patch version
-        if: inputs.skip_version_bump != 'true'
+        if: inputs.skip_version_bump != true
         id: version
         run: |
           OLD_VERSION=$(node -p "require('./package.json').version")
@@ -202,7 +202,7 @@ jobs:
           OPERATOR_WALLET_TOKEN: ${{ secrets.OPERATOR_WALLET_TOKEN }}
 
       - name: Commit version changes
-        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != 'true'
+        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != true
         working-directory: .
         run: |
           set -e

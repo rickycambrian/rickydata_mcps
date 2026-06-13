@@ -83,7 +83,7 @@ jobs:
           [ "$fail" -eq 0 ] || exit 1
 
       - name: Bump patch version
-        if: inputs.skip_version_bump != 'true'
+        if: inputs.skip_version_bump != true
         run: npm version patch --no-git-tag-version --workspace @rickydata/kfdb-code-mcp
 
       - name: Capture version
@@ -159,7 +159,7 @@ jobs:
             || echo "::warning::gateway single-server sync failed (will pick up on next 10-min cycle)"
 
       - name: Commit version bump
-        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != 'true'
+        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != true
         run: |
           set -e
           git config user.name "github-actions[bot]"
