@@ -92,7 +92,7 @@ jobs:
           NPM_CONFIG_PROVENANCE: 'true'
 
       - name: Update KFDB MCPServer entity (version + tools_available)
-        if: steps.publish.outcome == 'success'
+        if: steps.check.outputs.exists == 'true' || steps.publish.outcome == 'success'
         # Canonical MCPServer id from the existing public gateway catalog entry.
         env:
           KFDB_API_KEY: ${{ secrets.KFDB_API_KEY }}
@@ -141,7 +141,7 @@ jobs:
           fi
 
       - name: Sync server in MCP gateway (instant single-entity refresh)
-        if: steps.publish.outcome == 'success'
+        if: steps.check.outputs.exists == 'true' || steps.publish.outcome == 'success'
         env:
           OPERATOR_WALLET_TOKEN: ${{ secrets.OPERATOR_WALLET_TOKEN }}
         run: |
