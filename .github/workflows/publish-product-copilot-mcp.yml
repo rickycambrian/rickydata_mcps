@@ -93,7 +93,7 @@ jobs:
 
       - name: Update KFDB MCPServer entity (version + tools_available)
         if: steps.publish.outcome == 'success'
-        # Deterministic MCPServer id = uuidv5(DNS, "@rickydata/product-copilot-mcp").
+        # Canonical MCPServer id from the existing public gateway catalog entry.
         run: |
           node --input-type=module - <<'NODE'
             import { writeFileSync } from 'node:fs';
@@ -115,7 +115,7 @@ jobs:
               requires_auth:{Boolean:false}, required_env_vars:{String:JSON.stringify(['PRODUCT_COPILOT_PM_REPORT_URL'])},
               enriched_at:{String:new Date().toISOString()}, enrichment_version:{Integer:5},
             };
-            const id='c7b40daf-dfd0-5780-8797-4e50c939be25';
+            const id='7b00f8f8-afdd-402d-9d3f-5ee8a979ec98';
             fs.writeFileSync('/tmp/product-copilot-update.json', JSON.stringify({operations:[{operation:'update_node',id,label:'MCPServer',properties}]}));
             fs.writeFileSync('/tmp/product-copilot-create.json', JSON.stringify({operations:[{operation:'create_node',id,label:'MCPServer',properties}]}));
             console.log('KFDB payload: '+tools.length+' tools, v'+v);
@@ -139,7 +139,7 @@ jobs:
         if: steps.publish.outcome == 'success'
         run: |
           MCP_GW="${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}"
-          RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/health/reload/c7b40daf-dfd0-5780-8797-4e50c939be25" \
+          RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/health/reload/7b00f8f8-afdd-402d-9d3f-5ee8a979ec98" \
             -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
             -H "Content-Type: application/json" || echo '{"error":"sync failed"}')
           echo "Gateway sync: $RESPONSE"
