@@ -8,6 +8,8 @@ export interface PrivateTenantConfig {
   baseUrl?: string;
   walletAddress: string;
   authToken?: string;
+  deriveSessionId?: string;
+  deriveKey?: string;
 }
 
 export interface SetupProductCopilotOptions {
@@ -68,11 +70,23 @@ export function resolvePrivateTenantConfig(env: Record<string, string | undefine
     || env.RICKYDATA_AUTH_WALLET_ADDRESS
     || env.RICKYDATA_WALLET_ADDRESS;
   const authToken = env.RICKYDATA_KFDB_AUTH_TOKEN || env.RICKYDATA_AUTH_TOKEN;
+  const deriveSessionId = env.RICKYDATA_KFDB_DERIVE_SESSION_ID
+    || env.RICKYDATA_DERIVE_SESSION_ID
+    || env.PRODUCT_COPILOT_KFDB_DERIVE_SESSION_ID;
+  const deriveKey = env.RICKYDATA_KFDB_DERIVE_KEY
+    || env.RICKYDATA_DERIVE_KEY
+    || env.PRODUCT_COPILOT_KFDB_DERIVE_KEY;
   const missingContext: string[] = [];
   if (!walletAddress) missingContext.push('authenticated wallet context from RickyData Gateway');
 
   return {
-    config: missingContext.length === 0 ? { baseUrl, walletAddress: walletAddress!, authToken } : undefined,
+    config: missingContext.length === 0 ? {
+      baseUrl,
+      walletAddress: walletAddress!,
+      authToken,
+      deriveSessionId,
+      deriveKey,
+    } : undefined,
     missingContext,
     feedConfigured: Boolean(env.PRODUCT_COPILOT_PM_REPORT_URL || env.PRODUCT_COPILOT_PM_REPORT_PATH),
   };
@@ -168,11 +182,14 @@ export function productCopilotSchemaOperations(config: PrivateTenantConfig, opts
 }
 
 function privateTenantHeaders(config: PrivateTenantConfig): HeadersInit {
-  return {
+  const headers: Record<string, string> = {
     'content-type': 'application/json',
-    authorization: `Bearer ${config.authToken}`,
     'X-Wallet-Address': config.walletAddress,
   };
+  if (config.authToken) headers.authorization = `Bearer ${config.authToken}`;
+  if (config.deriveSessionId) headers['X-Derive-Session-Id'] = config.deriveSessionId;
+  if (config.deriveKey) headers['X-Derive-Key'] = config.deriveKey;
+  return headers;
 }
 
 function extractRows(payload: unknown): unknown[] {
@@ -193,7 +210,7 @@ export async function productCopilotSchemaExists(
   config: PrivateTenantConfig,
   opts: { fetcher?: typeof fetch; schemaVersion?: string } = {},
 ): Promise<boolean> {
-  if (!config.baseUrl || !config.authToken) return false;
+  if (!config.baseUrl || !config.authToken || !config.deriveSessionId || !config.deriveKey) return false;
   const ids = productCopilotSchemaIds(config.walletAddress, opts.schemaVersion ?? PRODUCT_COPILOT_SCHEMA_VERSION);
   const fetcher = opts.fetcher ?? fetch;
   const base = config.baseUrl.replace(/\/$/, '');
@@ -267,7 +284,7 @@ export async function setupProductCopilotPrivateTenant(options: SetupProductCopi
   const labels = operations.filter((op) => op.operation === 'create_node').map((op) => String(op.label));
   const edges = operations.filter((op) => op.operation === 'create_edge').map((op) => String(op.edge_type));
 
-  if (options.dryRun || !resolved.config.baseUrl || !resolved.config.authToken) {
+  if (options.dryRun || !resolved.config.baseUrl || !resolved.config.authToken || !resolved.config.deriveSessionId || !resolved.config.deriveKey) {
     return {
       ok: true,
       status: options.dryRun ? 'dry_run' : 'wallet_auth_write_unavailable',
@@ -284,10 +301,11 @@ export async function setupProductCopilotPrivateTenant(options: SetupProductCopi
         'planned deterministic schema ids only; no unauthenticated private write performed',
         `wallet_context_present: ${Boolean(resolved.config.walletAddress)}`,
         `wallet_auth_endpoint_present: ${Boolean(resolved.config.baseUrl && resolved.config.authToken)}`,
+        `wallet_derive_session_present: ${Boolean(resolved.config.deriveSessionId && resolved.config.deriveKey)}`,
       ],
       nextSteps: options.dryRun
         ? ['Run setup_private_product_copilot with dry_run=false after gateway provides wallet-auth KFDB write capability.']
-        : ['Gateway wallet context is present, but wallet-auth KFDB read/write capability is not yet exposed to this MCP runtime.'],
+        : ['Gateway wallet context is present, but the wallet sign-to-derive session headers are not exposed to this MCP runtime yet.'],
     };
   }
 

@@ -59,11 +59,32 @@ describe('tool surface', () => {
     expect(privateFeedHeaders(env)).not.toHaveProperty('X-Derive-Key');
   });
 
+  it('does not query/write private KFDB when derive session headers are missing', async () => {
+    const calls: string[] = [];
+    const result = await setupProductCopilotPrivateTenant({
+      env: {
+        PRODUCT_COPILOT_KFDB_API_URL: 'https://kfdb.example',
+        RICKYDATA_AUTH_TOKEN: 'wallet-session-token',
+        RICKYDATA_AUTH_WALLET_ADDRESS: '0xABC',
+      },
+      fetcher: async (url) => {
+        calls.push(String(url));
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+    });
+
+    expect(result.status).toBe('wallet_auth_write_unavailable');
+    expect(result.proof).toContain('wallet_derive_session_present: false');
+    expect(calls).toEqual([]);
+  });
+
   it('idempotently checks existing schema before creating the private Product Copilot schema', async () => {
     const env = {
       PRODUCT_COPILOT_KFDB_API_URL: 'https://kfdb.example',
       RICKYDATA_AUTH_TOKEN: 'wallet-session-token',
       RICKYDATA_AUTH_WALLET_ADDRESS: '0xABC',
+      RICKYDATA_KFDB_DERIVE_SESSION_ID: 'derive-session-1',
+      RICKYDATA_KFDB_DERIVE_KEY: 'derive-key-hex',
     };
     const ops = productCopilotSchemaOperations({
       baseUrl: env.PRODUCT_COPILOT_KFDB_API_URL,
@@ -96,6 +117,8 @@ describe('tool surface', () => {
     expect(calls[1]?.init?.headers).toMatchObject({
       authorization: 'Bearer wallet-session-token',
       'X-Wallet-Address': '0xABC',
+      'X-Derive-Session-Id': 'derive-session-1',
+      'X-Derive-Key': 'derive-key-hex',
     });
     const body = JSON.parse(String(calls[1]?.init?.body));
     expect(body.operations.every((op: any) => op.mode === 'merge')).toBe(true);

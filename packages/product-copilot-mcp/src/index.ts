@@ -10,7 +10,7 @@ import { RESPONSE_MAX_LENGTH } from './config.js';
 import { TOOL_DEFS, handleToolCall } from './tools.js';
 
 const SERVER_NAME = 'product-copilot-mcp';
-const SERVER_VERSION = '0.1.11';
+const SERVER_VERSION = '0.1.13';
 
 function truncateResponse(result: unknown): string {
   const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
