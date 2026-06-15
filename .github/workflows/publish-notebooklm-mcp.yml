@@ -17,8 +17,13 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Deterministic MCPServer registry id = uuidv5(DNS, "@rickydata/notebooklm-mcp").
-  SERVER_ID: dd3c273b-721d-5f3c-a12c-4784e822a041
+  # Registered MCPServer id in KFDB / the gateway. We standardize on the
+  # established notebook-studio serverId (the id `connect` already uploads
+  # NOTEBOOKLM_STATE_B64 under and the id the notebook-studio agent references),
+  # so per-wallet secret injection lines up and already-connected wallets are
+  # drop-in. (Canonical uuidv5(DNS, "@rickydata/notebooklm-mcp") would be
+  # dd3c273b-721d-5f3c-a12c-4784e822a041; we deliberately reuse 1834da3e.)
+  SERVER_ID: 1834da3e-8ba4-43b2-b8ea-b7207570f2e0
 
 jobs:
   publish:
