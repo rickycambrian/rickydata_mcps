@@ -1,0 +1,41 @@
+[
+  [
+    [
+      null,
+      [
+        "Pasted Text",
+        "<SOURCE TEXT>"
+      ],
+      null,
+      2,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      1
+    ]
+  ],
+  "nb-EXAMPLE",
+  [
+    2,
+    null,
+    null,
+    [
+      1,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        1
+      ]
+    ]
+  ]
+]

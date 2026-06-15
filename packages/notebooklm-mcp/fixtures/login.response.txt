@@ -1,0 +1,4 @@
+<!DOCTYPE html><html lang="en"><head><title>Sign in - Google Accounts</title></head>
+<body><form action="https://accounts.google.com/signin/v2/challenge" method="post">
+<div id="ServiceLogin">Sign in to continue to NotebookLM</div>
+</form></body></html>

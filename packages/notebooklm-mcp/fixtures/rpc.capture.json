@@ -1,0 +1,42 @@
+[
+  {
+    "rpcid": "izAoDd",
+    "action": "add_source",
+    "sourcePath": "/notebook/<id>",
+    "bl": "boq_labs-tailwind-frontend_20260609.22_p0",
+    "capturedAt": "2026-06-15T00:00:00.000Z",
+    "note": "Pasted-text flow. URL/website flow not yet captured."
+  },
+  {
+    "rpcid": "R7cb6c",
+    "action": "generate_audio",
+    "sourcePath": "/notebook/<id>",
+    "bl": "boq_labs-tailwind-frontend_20260609.22_p0",
+    "capturedAt": "2026-06-15T00:00:00.000Z",
+    "note": "Audio Overview. Needs source_ids; returns artifact id."
+  },
+  {
+    "rpcid": "gArtLc",
+    "action": "get_audio_status",
+    "sourcePath": "/notebook/<id>",
+    "bl": "boq_labs-tailwind-frontend_20260609.22_p0",
+    "capturedAt": "2026-06-15T00:00:00.000Z",
+    "note": "Lists studio artifacts + status."
+  },
+  {
+    "rpcid": "HpN0Ub",
+    "action": "download_audio",
+    "sourcePath": "/notebook/<id>",
+    "bl": "boq_labs-tailwind-frontend_20260609.22_p0",
+    "capturedAt": "2026-06-15T00:00:00.000Z",
+    "note": "Authorize-download (keys on artifact id; empty response). Media URL via Playwright download event."
+  },
+  {
+    "rpcid": "ozz5Z",
+    "action": "list_notebooks",
+    "sourcePath": "/",
+    "bl": "boq_labs-tailwind-frontend_20260609.22_p0",
+    "capturedAt": "2026-06-15T00:00:00.000Z",
+    "note": "rpcid observed on the landing page; payload not yet captured under the request hook (TODO_CAPTURE)."
+  }
+]

@@ -24,6 +24,7 @@ For the enrichment pipeline to detect a package as an MCP server, it MUST have `
 packages/
   rickydata-mcp/          # Marketplace + wallet tools
   research-papers-mcp/    # arXiv ingestion + KFDB-backed paper navigation (6 tools)
+  notebooklm-mcp/         # NotebookLM via internal batchexecute RPC (no DOM scraping); per-wallet vault session
   geo-research-api/       # Geo research paper API (not an MCP server)
   <your-server>/          # Your new MCP server
 _template/                # Template for new servers

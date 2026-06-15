@@ -1,0 +1,34 @@
+[
+  [
+    2,
+    null,
+    null,
+    [
+      1,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        1
+      ]
+    ],
+    [
+      [
+        1,
+        4,
+        8,
+        2,
+        3,
+        6
+      ]
+    ]
+  ],
+  "nb-EXAMPLE",
+  "NOT artifact.status = \"ARTIFACT_STATUS_SUGGESTED\""
+]
