@@ -109,3 +109,76 @@ export async function fetchCandidates(params: {
 export async function fetchRepositories(): Promise<unknown> {
   return benchGet("/api/benchmarks/repositories");
 }
+
+// ---------------------------------------------------------------------------
+// Solution Engine — agent-facing pre-flight context.
+// ---------------------------------------------------------------------------
+//
+// /api/solve turns a problem statement into one deterministic, leak-safe Solution
+// Card (target files, an ordered recipe grounded in how agents fixed that class of
+// problem against the human merged solution, the best model+cost, an honest
+// confidence, and citations). It never returns gold-diff content — only file paths
+// and scalars. The card is grounded in OUR benchmark corpus (other repos' solved
+// issues), so it is cross-repo knowledge transfer, not a leak of the caller's repo.
+
+export interface RecipeStep {
+  action: string;
+  label: string;
+  target: string | null;
+  grounded: boolean;
+  evidence?: Record<string, unknown> | null;
+}
+export interface SolutionCard {
+  problem: string;
+  matchedIssue: {
+    repo: string;
+    issueNumber: number;
+    title: string | null;
+    similarity: number | null;
+    matchedBy?: string[] | null;
+  } | null;
+  relatedIssues: Array<{ repo: string; issueNumber: number; title: string | null }>;
+  targetFiles: string[];
+  recipe: { steps: RecipeStep[]; generalized: boolean; notes: string[] };
+  bestApproach: {
+    model: string | null;
+    provider: string | null;
+    costUsd: number | null;
+    solved: boolean | null;
+    recall: number | null;
+    verified: boolean;
+  } | null;
+  confidence: { score: number; label: string; reason: string | null; inputs?: unknown };
+  citations: Array<{ type: string; href: string; label: string }>;
+  caveats: string[];
+  meta?: Record<string, unknown>;
+}
+export interface SolutionPattern {
+  type: string;
+  label: string;
+  issueCount: number;
+  repos: string[];
+  recipe: { steps: RecipeStep[] };
+  bestModel: { model: string; solves: number; attempts: number } | null;
+  medianCostUsd: number | null;
+  testCommandExample: string | null;
+  exampleIssues: Array<{ repo: string; issueNumber: number; targetFiles: string[] }>;
+}
+
+/** GET /api/solve?problem=… — one deterministic Solution Card. */
+export async function fetchSolutionRecipe(problem: string): Promise<SolutionCard> {
+  return benchGet("/api/solve", { problem }) as Promise<SolutionCard>;
+}
+
+/** GET /api/solve/patterns — the reusable problem-type pattern library. */
+export async function fetchSolutionPatterns(): Promise<{
+  patterns: SolutionPattern[];
+  typeCount?: number;
+  issueCount?: number;
+}> {
+  return benchGet("/api/solve/patterns") as Promise<{
+    patterns: SolutionPattern[];
+    typeCount?: number;
+    issueCount?: number;
+  }>;
+}

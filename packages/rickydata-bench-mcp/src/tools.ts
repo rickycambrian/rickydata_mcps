@@ -8,7 +8,11 @@ import {
   fetchRecommendations,
   fetchCompare,
   fetchCandidates,
+  fetchSolutionRecipe,
+  fetchSolutionPatterns,
   type BenchRunRow,
+  type SolutionCard,
+  type SolutionPattern,
 } from "./bench.js";
 import { sanitizeGoldFields } from "./sanitize.js";
 
@@ -19,6 +23,8 @@ export const TOOL_NAMES = [
   "compare_configs",
   "get_trace_summary",
   "search_tasks",
+  "get_solution_recipe",
+  "browse_solution_patterns",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -92,6 +98,70 @@ export function projectRun(r: BenchRunRow): Record<string, unknown> {
 function clampLimit(v: unknown, def: number, max: number): number {
   const n = typeof v === "number" ? v : def;
   return Math.min(Math.max(1, Math.floor(n)), max);
+}
+
+const cost = (c: number | null | undefined): string =>
+  c == null ? "?" : c === 0 ? "$0" : `$${c.toFixed(4)}`;
+const pct = (v: number | null | undefined): string =>
+  v == null ? "?" : `${Math.round(v * 100)}%`;
+
+/**
+ * Render a Solution Card as a compact, actionable plain-text briefing for a coding
+ * agent's pre-flight context. Deterministic; pure. Never emits gold-diff content
+ * (the card only carries paths + scalars). Steps are tagged grounded/prescriptive
+ * so the agent knows which are evidence-backed vs. recommended.
+ */
+export function summarizeSolutionCard(card: SolutionCard): string {
+  if (!card.matchedIssue) {
+    const reason = card.confidence?.reason ?? "no close proven issue";
+    return [
+      `No proven solution matched "${card.problem}".`,
+      `Reason: ${reason}`,
+      card.caveats?.length ? `Caveats: ${card.caveats.join(" ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  const m = card.matchedIssue;
+  const lines: string[] = [
+    `Closest proven issue: ${m.repo}#${m.issueNumber}${m.title ? ` — ${m.title}` : ""}`,
+    `Confidence: ${card.confidence.label} (${pct(card.confidence.score)})${
+      card.confidence.reason ? ` — ${card.confidence.reason}` : ""
+    }`,
+  ];
+  if (card.targetFiles.length) lines.push(`Target files: ${card.targetFiles.join(", ")}`);
+  if (card.recipe?.steps?.length) {
+    lines.push("Recipe:");
+    card.recipe.steps.forEach((s, i) => {
+      const tag = s.grounded ? "" : " [prescriptive]";
+      const target = s.target ? ` → ${s.target}` : "";
+      lines.push(`  ${i + 1}. ${s.label}${target}${tag}`);
+    });
+  }
+  if (card.bestApproach?.model) {
+    const b = card.bestApproach;
+    lines.push(
+      `Best approach observed: ${b.model}${b.provider ? ` (${b.provider})` : ""} — ` +
+        `gold match ${pct(b.recall)}, ${b.verified ? "ran tests" : "no tests"}, ${cost(b.costUsd)}` +
+        `${b.solved != null ? `, ${b.solved ? "solved" : "not solved"}` : ""}`,
+    );
+  }
+  if (card.caveats?.length) lines.push(`Caveats: ${card.caveats.join(" ")}`);
+  return lines.join("\n");
+}
+
+/** Compact projection of a pattern-library entry (drops verbose evidence). */
+export function projectPattern(p: SolutionPattern): Record<string, unknown> {
+  return {
+    type: p.type,
+    label: p.label,
+    issueCount: p.issueCount,
+    repos: p.repos,
+    bestModel: p.bestModel?.model ?? null,
+    medianCostUsd: p.medianCostUsd,
+    testCommandExample: p.testCommandExample,
+    recipe: (p.recipe?.steps ?? []).map((s) => s.label),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +252,44 @@ export const TOOL_DEFS: Tool[] = [
       required: ["repo"],
     },
   },
+  {
+    name: "get_solution_recipe",
+    description:
+      "PRE-FLIGHT CONTEXT for solving a coding problem. Describe the bug/task in natural language " +
+      "and get back a deterministic, leak-safe Solution Card distilled from how agents actually " +
+      "fixed that CLASS of problem against the human merged solution across the benchmark corpus: " +
+      "the likely target file(s), an ordered recipe (read failing test → locate symbol → edit target → " +
+      "run tests) grounded in real trajectories, the best model+cost observed, an honest confidence, and " +
+      "citations. Returns NO source/diff content — only file paths and scalars — and is grounded in OTHER " +
+      "repos' solved issues (cross-repo knowledge transfer). Call this before you start editing to orient " +
+      "on the most-proven approach; treat low-confidence cards as weak hints.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        problem: {
+          type: "string",
+          description:
+            "The problem in natural language — a symptom, a failing behavior, a file or function. " +
+            "E.g. 'trailing newline removed when decoding text from ANSI'.",
+        },
+      },
+      required: ["problem"],
+    },
+  },
+  {
+    name: "browse_solution_patterns",
+    description:
+      "List the reusable problem-type pattern library: each problem type (e.g. 'Python type validation', " +
+      "'Rust lint rule') with its canonical recipe, the best model observed, and the median cost, " +
+      "aggregated across the gold-backed core set. Use to explore what classes of problem are covered " +
+      "before calling get_solution_recipe.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max problem types (default 20, max 50)." },
+      },
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -253,6 +361,22 @@ async function handle(name: string, args: Record<string, unknown>): Promise<unkn
       const repo = args.repo as string;
       if (!repo) return { error: "repo is required" };
       return fetchCandidates({ repo, limit: clampLimit(args.limit, 25, 100) });
+    }
+    case "get_solution_recipe": {
+      const problem = (args.problem as string | undefined)?.trim();
+      if (!problem) return { error: "problem is required" };
+      const card = await fetchSolutionRecipe(problem);
+      return { summary: summarizeSolutionCard(card), card };
+    }
+    case "browse_solution_patterns": {
+      const lib = await fetchSolutionPatterns();
+      const limit = clampLimit(args.limit, 20, 50);
+      const patterns = (lib.patterns ?? []).slice(0, limit);
+      return {
+        typeCount: lib.typeCount ?? patterns.length,
+        issueCount: lib.issueCount,
+        patterns: patterns.map(projectPattern),
+      };
     }
     default:
       return { error: `Unknown tool: ${name}` };

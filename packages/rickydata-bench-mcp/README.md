@@ -1,8 +1,10 @@
 # @rickydata/rickydata-bench-mcp
 
-Read-only **analysis MCP** for the [rickydata_bench](https://benchmarks.rickydata.org)
-agentic-coding benchmark. Inspect benchmark runs, trace summaries, config
-leaderboards, per-task comparisons, and the (gold-redacted) task catalog.
+Read-only **analysis + solution-engine MCP** for the
+[rickydata_bench](https://benchmarks.rickydata.org) agentic-coding benchmark.
+Inspect benchmark runs, trace summaries, config leaderboards, per-task
+comparisons, and the (gold-redacted) task catalog — **and** pull a proven,
+deterministic *Solution Card* into your coding agent's pre-flight context.
 
 > **This server is an analysis tool and is NEVER wired into a benchmark run.**
 > It reads only the public, gold-redacted bench API. As defense-in-depth it also
@@ -18,6 +20,29 @@ leaderboards, per-task comparisons, and the (gold-redacted) task catalog.
 | `compare_configs` | `GET /api/benchmarks/compare?repo&issue_number` |
 | `get_trace_summary` | `GET /api/benchmarks/live` (run's `trace_kg_summary`) |
 | `search_tasks` | `GET /api/benchmarks/candidates?repo` (gold-redacted) |
+| `get_solution_recipe` | `GET /api/solve?problem=…` — pre-flight Solution Card |
+| `browse_solution_patterns` | `GET /api/solve/patterns` — problem-type recipe library |
+
+### Solution Engine — bring proven recipes into local development
+
+`get_solution_recipe` is the headline agent-facing tool. Describe the bug/task you
+are about to work on in natural language, and it returns a deterministic, leak-safe
+**Solution Card** distilled from how agents actually fixed *that class of problem*
+against the human merged solution across the benchmark corpus:
+
+- the likely **target file(s)**,
+- an ordered **recipe** (read failing test → locate symbol → edit target → run
+  tests), each step tagged *grounded* (evidence-backed) or *prescriptive*,
+- the **best model + cost** observed on the closest proven issue,
+- an honest **confidence** (no-gold and single-run cases are gated to *low*),
+- **citations** back to the bench Compare / trajectory pages.
+
+It returns **no source or diff content** — only file paths and scalars — and is
+grounded in *other* repos' solved issues, so it is cross-repo knowledge transfer,
+not a leak of your own repository. A coding agent calls it **before editing** to
+orient on the most-proven approach; low-confidence cards are weak hints, not gospel.
+The response carries both a ready-to-read `summary` (numbered recipe briefing) and
+the full structured `card`. Browse what's covered with `browse_solution_patterns`.
 
 ## Configuration
 

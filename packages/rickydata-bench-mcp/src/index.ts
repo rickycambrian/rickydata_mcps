@@ -9,7 +9,7 @@ import { TOOL_DEFS, handleToolCall } from "./tools.js";
 import { RESPONSE_MAX_LENGTH } from "./config.js";
 
 const SERVER_NAME = "rickydata-bench-mcp";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.2.0";
 
 function truncateResponse(result: unknown): string {
   const text =

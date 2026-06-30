@@ -1,13 +1,81 @@
 import { describe, it, expect } from "vitest";
-import { TOOL_DEFS, TOOL_NAMES, buildLeaderboard, projectRun } from "../src/tools.js";
+import {
+  TOOL_DEFS,
+  TOOL_NAMES,
+  buildLeaderboard,
+  projectRun,
+  summarizeSolutionCard,
+  projectPattern,
+} from "../src/tools.js";
+import type { SolutionCard, SolutionPattern } from "../src/bench.js";
 import { sanitizeGoldFields } from "../src/sanitize.js";
 
 describe("tool surface", () => {
-  it("exposes exactly the 6 documented tools with unique names", () => {
+  it("exposes exactly the 8 documented tools with unique names", () => {
     const names = TOOL_DEFS.map((t) => t.name);
-    expect(names.length).toBe(6);
+    expect(names.length).toBe(8);
     expect(new Set(names).size).toBe(names.length);
     for (const expected of TOOL_NAMES) expect(names).toContain(expected);
+  });
+});
+
+describe("summarizeSolutionCard", () => {
+  const card: SolutionCard = {
+    problem: "trailing newline removed when decoding ansi",
+    matchedIssue: { repo: "Textualize/rich", issueNumber: 3577, title: "Trailing line break removed", similarity: 0.8, matchedBy: ["semantic", "lexical"] },
+    relatedIssues: [],
+    targetFiles: ["rich/ansi.py"],
+    recipe: {
+      steps: [
+        { action: "read_failing_test", label: "Read the failing test", target: null, grounded: false },
+        { action: "edit_target", label: "Edit the target file", target: "rich/ansi.py", grounded: true },
+        { action: "run_tests", label: "Run the test suite", target: "pytest tests/test_ansi.py", grounded: true },
+      ],
+      generalized: true,
+      notes: [],
+    },
+    bestApproach: { model: "glm-5.1", provider: "zai", costUsd: 0.115, solved: null, recall: 1, verified: true },
+    confidence: { score: 0.66, label: "high", reason: null },
+    citations: [],
+    caveats: ["No trace runs joined to benchmark_runs."],
+  };
+
+  it("renders an actionable briefing with numbered recipe + prescriptive tags", () => {
+    const out = summarizeSolutionCard(card);
+    expect(out).toContain("Textualize/rich#3577");
+    expect(out).toContain("Confidence: high (66%)");
+    expect(out).toContain("Target files: rich/ansi.py");
+    expect(out).toMatch(/1\. Read the failing test \[prescriptive\]/);
+    expect(out).toMatch(/2\. Edit the target file → rich\/ansi\.py/);
+    expect(out).toContain("Best approach observed: glm-5.1 (zai) — gold match 100%, ran tests, $0.1150");
+    expect(out).toContain("Caveats:");
+  });
+
+  it("degrades cleanly when no issue matched", () => {
+    const degraded: SolutionCard = { ...card, matchedIssue: null, confidence: { score: 0.1, label: "low", reason: "no close issue" } };
+    const out = summarizeSolutionCard(degraded);
+    expect(out).toContain("No proven solution matched");
+    expect(out).toContain("no close issue");
+  });
+});
+
+describe("projectPattern", () => {
+  it("compacts a pattern to scalars + recipe labels", () => {
+    const p: SolutionPattern = {
+      type: "python:type-validation",
+      label: "Python type validation",
+      issueCount: 13,
+      repos: ["pydantic/pydantic"],
+      recipe: { steps: [{ action: "edit_target", label: "Edit the file(s)", target: null, grounded: false }] },
+      bestModel: { model: "kimi-for-coding", solves: 4, attempts: 9 },
+      medianCostUsd: 0.245,
+      testCommandExample: "pytest",
+      exampleIssues: [{ repo: "pydantic/pydantic", issueNumber: 13148, targetFiles: ["pydantic/x.py"] }],
+    };
+    const out = projectPattern(p);
+    expect(out.bestModel).toBe("kimi-for-coding");
+    expect(out.medianCostUsd).toBe(0.245);
+    expect(out.recipe).toEqual(["Edit the file(s)"]);
   });
 });
 
