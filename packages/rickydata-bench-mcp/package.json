@@ -1,11 +1,11 @@
 {
   "name": "@rickydata/rickydata-bench-mcp",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": false,
   "publishConfig": {
     "access": "public"
   },
-  "description": "Read-only analysis MCP for the rickydata_bench agentic-coding benchmark: list runs, inspect run/trace summaries, leaderboards, config comparisons, and task search over the public (gold-redacted) bench API. Never wired into bench runs.",
+  "description": "Read-only analysis + solution-engine MCP for the rickydata_bench agentic-coding benchmark: list runs, inspect run/trace summaries, leaderboards, config comparisons, task search, AND a deterministic pre-flight Solution Card (get_solution_recipe / browse_solution_patterns) over the public (gold-redacted) bench API. Never wired into bench runs.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/rickycambrian/rickydata_mcps.git",
