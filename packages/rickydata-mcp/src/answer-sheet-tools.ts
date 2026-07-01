@@ -57,8 +57,10 @@ export function getAnswerSheetToolDefinitions(): AnswerSheetToolDef[] {
             type: "string",
             description:
               "Filter by problem category. Valid values: edit_mismatch, test_failure, " +
-              "import_error, type_error, build_failure, runtime_error, permission_error, " +
-              "network_error, config_error, syntax_error, dependency_error, timeout",
+              "file_not_found, syntax_error, runtime_error, import_error, type_error, " +
+              "permission_error, timeout, lint_error, build_error, config_error. " +
+              "Memory-v1 categories (non-error retrieval objects): user_preference, " +
+              "project_decision, clarification.",
           },
           language: {
             type: "string",
@@ -98,7 +100,12 @@ export function getAnswerSheetToolDefinitions(): AnswerSheetToolDef[] {
           },
           problem_category: {
             type: "string",
-            description: 'Category of problem (e.g., "edit_mismatch", "test_failure")',
+            description:
+              'Category of problem. Error categories: edit_mismatch, test_failure, ' +
+              'file_not_found, syntax_error, runtime_error, import_error, type_error, ' +
+              'permission_error, timeout, lint_error, build_error, config_error. ' +
+              'Memory-v1 categories (non-error retrieval objects): user_preference, ' +
+              'project_decision, clarification.',
           },
           solution_summary: {
             type: "string",
