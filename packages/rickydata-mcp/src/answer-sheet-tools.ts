@@ -12,7 +12,7 @@
  *
  * Requires environment variables:
  *   KFDB_URL      -- KFDB API base URL
- *   KFDB_API_KEY  -- API key (X-KF-API-Key header)
+ *   KFDB_API_KEY  -- API key (sent as Authorization: Bearer)
  */
 
 /** Tool names */
@@ -332,7 +332,7 @@ async function handleGetAnswerSheets(
 
   const qs = params.toString();
   const res = await fetch(`${kfdbUrl}/api/v1/answer-sheets${qs ? "?" + qs : ""}`, {
-    headers: { "X-KF-API-Key": kfdbApiKey },
+    headers: { Authorization: `Bearer ${kfdbApiKey}` },
   });
 
   if (!res.ok) {
@@ -368,7 +368,7 @@ async function handleCreateAnswerSheet(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-KF-API-Key": kfdbApiKey,
+      Authorization: `Bearer ${kfdbApiKey}`,
     },
     body: JSON.stringify(args),
   });
@@ -412,7 +412,7 @@ async function handleMatchAnswerSheet(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-KF-API-Key": kfdbApiKey,
+      Authorization: `Bearer ${kfdbApiKey}`,
     },
     body: JSON.stringify(args),
   });
@@ -461,7 +461,7 @@ async function handleRateAnswerSheet(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-KF-API-Key": kfdbApiKey,
+      Authorization: `Bearer ${kfdbApiKey}`,
     },
     body: JSON.stringify(body),
   });
