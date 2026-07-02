@@ -115,7 +115,9 @@ export function getAnswerSheetToolDefinitions(): AnswerSheetToolDef[] {
           },
           solution_steps: {
             type: "array",
-            description: "Ordered steps to resolve the issue",
+            description:
+              "Ordered steps to resolve the issue. Accepted as a JSON array (this shape) " +
+              "or a pre-serialized JSON string; the server stores it as TEXT either way.",
             items: {
               type: "object",
               properties: {
@@ -154,11 +156,29 @@ export function getAnswerSheetToolDefinitions(): AnswerSheetToolDef[] {
             description: "Searchable tags",
           },
           repo_context: {
-            description: "Repository or language context (JSON object)",
+            description:
+              "Repository or language context. Accepted as a JSON object or a " +
+              "pre-serialized JSON string; stored as TEXT.",
           },
           is_public: {
             type: "boolean",
             description: "Whether this sheet should be visible to other tenants (default: false)",
+          },
+          initial_success_count: {
+            type: "number",
+            description:
+              "Optional create-time Bayesian prior: seed success count. Confidence is " +
+              "success/(success+failure+5). Omit for the default 0 (confidence 0.0 until feedback).",
+          },
+          initial_failure_count: {
+            type: "number",
+            description: "Optional create-time prior: seed failure count. Pairs with initial_success_count.",
+          },
+          initial_confidence: {
+            type: "number",
+            description:
+              "Optional convenience prior (0..1): seeds the counts to approximate this confidence " +
+              "when explicit counts are not given (failure=0, success=round(c*5/(1-c))). Explicit counts win.",
           },
         },
         required: ["error_signature", "problem_category", "solution_summary", "solution_steps"],
