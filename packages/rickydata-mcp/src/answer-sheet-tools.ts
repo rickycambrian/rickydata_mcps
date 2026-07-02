@@ -60,7 +60,8 @@ export function getAnswerSheetToolDefinitions(): AnswerSheetToolDef[] {
               "file_not_found, syntax_error, runtime_error, import_error, type_error, " +
               "permission_error, timeout, lint_error, build_error, config_error. " +
               "Memory-v1 categories (non-error retrieval objects): user_preference, " +
-              "project_decision, clarification.",
+              "project_decision, clarification. " +
+              "Usage/knowledge categories: api_usage, environment, debugging.",
           },
           language: {
             type: "string",
@@ -105,7 +106,8 @@ export function getAnswerSheetToolDefinitions(): AnswerSheetToolDef[] {
               'file_not_found, syntax_error, runtime_error, import_error, type_error, ' +
               'permission_error, timeout, lint_error, build_error, config_error. ' +
               'Memory-v1 categories (non-error retrieval objects): user_preference, ' +
-              'project_decision, clarification.',
+              'project_decision, clarification. ' +
+              'Usage/knowledge categories: api_usage, environment, debugging.',
           },
           solution_summary: {
             type: "string",
