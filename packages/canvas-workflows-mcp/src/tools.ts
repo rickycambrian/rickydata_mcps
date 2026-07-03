@@ -16,6 +16,7 @@ import {
   FailClosedError,
   HomeApiError,
   type CanvasTarget,
+  type ConnectToSpec,
 } from './home-client.js';
 
 /** Cap tool text payloads so a large run/list can't blow the model's context. */
@@ -91,7 +92,7 @@ export interface RegisterToolsDeps {
   client: HomeCanvasClient;
 }
 
-/** The seven canvas tools, all backed by home's authenticated routes. */
+/** The twelve canvas tools, all backed by home's authenticated routes. */
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { client } = deps;
 
@@ -175,6 +176,118 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     },
   );
 
+  // ── Typed authoring tools (SPEC-005 §4) ──────────────────────────────────
+  // Surgical, validated construction — never resend-the-whole-graph. Home
+  // validates BEFORE persisting (DAG acyclicity, known node types, tool-policy
+  // sanity, guard reachability) and enforces optimistic concurrency: pass the
+  // expectedVersion you last saw; a mismatch returns home's 409 with currentRev
+  // — reload with get_workflow and retry. The incremental agent loop is
+  // canvas_add_node → canvas_connect_nodes → canvas_validate_workflow → run_workflow.
+
+  const expectedVersionSchema = z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      'Optimistic concurrency token: the workflow rev you last read. Mismatch → 409 with currentRev (someone else saved in between — reload and retry). Omit to skip the check (last-write-wins).',
+    );
+
+  server.tool(
+    'canvas_add_node',
+    'Add ONE node to a saved workflow (validated before persisting), optionally wiring it in the same step. Node shape: {id, type, data?, position?}. Known types include text-input, agent, mcp-tool, approval-gate, code-gate, output. Returns {nodeId, rev, warnings}.',
+    {
+      workflowId: z.string().describe('The workflow to mutate.'),
+      node: jsonObjectSchema.describe('The node: {id, type, data?, position?} — JSON object or string.'),
+      connectTo: jsonObjectSchema
+        .optional()
+        .describe('Optional one-step wiring: {from?: nodeId, to?: nodeId, fromPort?, toPort?}.'),
+      expectedVersion: expectedVersionSchema,
+    },
+    async ({ workflowId, node, connectTo, expectedVersion }) => {
+      try {
+        const nodeObj = coerceObject(node);
+        if (!nodeObj || typeof nodeObj['id'] !== 'string' || typeof nodeObj['type'] !== 'string') {
+          throw new Error('node needs string id and type');
+        }
+        return ok(await client.addNode(workflowId, nodeObj, coerceObject(connectTo) as ConnectToSpec | undefined, expectedVersion));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    'canvas_connect_nodes',
+    'Connect two existing nodes in a saved workflow (validated: endpoints must exist, no cycles, no duplicates). Returns {connectionId, rev, warnings}.',
+    {
+      workflowId: z.string().describe('The workflow to mutate.'),
+      from: z.string().describe('Source node id.'),
+      to: z.string().describe('Target node id.'),
+      fromPort: z.string().optional().describe('Optional source port (handle) id.'),
+      toPort: z.string().optional().describe('Optional target port (handle) id.'),
+      expectedVersion: expectedVersionSchema,
+    },
+    async ({ workflowId, from, to, fromPort, toPort, expectedVersion }) => {
+      try {
+        return ok(await client.connectNodes(workflowId, from, to, { fromPort, toPort, expectedRev: expectedVersion }));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    'canvas_remove_node',
+    'Remove a node (its edges detach). REFUSES to remove an approval-gate/code-gate that is the last guard upstream of a side-effect node (orphaned_guard). Returns {ok, removed, rev, warnings}.',
+    {
+      workflowId: z.string().describe('The workflow to mutate.'),
+      nodeId: z.string().describe('The node to remove.'),
+      expectedVersion: expectedVersionSchema,
+    },
+    async ({ workflowId, nodeId, expectedVersion }) => {
+      try {
+        return ok(await client.removeNode(workflowId, nodeId, expectedVersion));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    'canvas_update_node',
+    "Surgically merge config into one node's data (objects merge one level deep, null deletes a key, everything else replaces) — no resend-the-whole-graph. Returns {node, rev, warnings}.",
+    {
+      workflowId: z.string().describe('The workflow to mutate.'),
+      nodeId: z.string().describe('The node whose config to merge.'),
+      configMerge: jsonObjectSchema.describe(
+        "Partial config, e.g. {agent: {model: 'sonnet', disallowedTools: ['Write']}} or {gateSet: 'evidence-kinds'}.",
+      ),
+      expectedVersion: expectedVersionSchema,
+    },
+    async ({ workflowId, nodeId, configMerge, expectedVersion }) => {
+      try {
+        const merge = coerceObject(configMerge);
+        if (!merge) throw new Error('configMerge must be a JSON object');
+        return ok(await client.updateNode(workflowId, nodeId, merge, expectedVersion));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    'canvas_validate_workflow',
+    'Full validation of a saved workflow WITHOUT mutating it: DAG acyclicity, endpoint existence, known node types, tool-policy sanity, code-gate config, guard reachability for side-effect nodes. Returns {valid, errors[], warnings[]} with machine-actionable codes.',
+    { workflowId: z.string().describe('The workflow to validate.') },
+    async ({ workflowId }) => {
+      try {
+        return ok(await client.validateWorkflow(workflowId));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
   server.tool(
     'resolve_approval',
     'Approve or reject a HITL approval gate that a run paused on. Records a durable human decision in rickydata_home AND unblocks the still-open run on its target.',
@@ -226,6 +339,11 @@ export const TOOL_NAMES = [
   'get_workflow',
   'save_workflow',
   'run_workflow',
+  'canvas_add_node',
+  'canvas_connect_nodes',
+  'canvas_remove_node',
+  'canvas_update_node',
+  'canvas_validate_workflow',
   'resolve_approval',
   'get_run',
   'list_runs',

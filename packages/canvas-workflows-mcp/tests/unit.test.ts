@@ -46,14 +46,19 @@ function client(opts: { signer?: typeof signer | null; fetch: typeof fetch }) {
 }
 
 describe('tool surface', () => {
-  it('exposes exactly the seven documented tools with unique names', () => {
-    expect(TOOL_NAMES).toHaveLength(7);
+  it('exposes exactly the twelve documented tools with unique names', () => {
+    expect(TOOL_NAMES).toHaveLength(12);
     expect(new Set(TOOL_NAMES).size).toBe(TOOL_NAMES.length);
     expect([...TOOL_NAMES]).toEqual([
       'list_workflows',
       'get_workflow',
       'save_workflow',
       'run_workflow',
+      'canvas_add_node',
+      'canvas_connect_nodes',
+      'canvas_remove_node',
+      'canvas_update_node',
+      'canvas_validate_workflow',
       'resolve_approval',
       'get_run',
       'list_runs',
@@ -159,6 +164,45 @@ describe('JSON tools hit the right path/method/body with the wallet bearer', () 
     await c.listRuns('w1');
     expect(calls[0].url).toBe('http://home.test/api/canvas/runs');
     expect(calls[1].url).toBe('http://home.test/api/canvas/runs?workflowId=w1');
+  });
+
+  it('canvas authoring methods hit the typed routes with expectedRev threaded through', async () => {
+    const { fetch: f, calls } = captureFetch(() => new Response('{"nodeId":"g","rev":2,"warnings":[]}'));
+    const c = client({ fetch: f });
+
+    await c.addNode('wf 1', { id: 'g', type: 'code-gate', data: { gateSet: 'evidence-kinds' } }, { from: 'agent' }, 1);
+    expect(calls[0].url).toBe('http://home.test/api/canvas/workflows/wf%201/nodes');
+    expect(calls[0].method).toBe('POST');
+    expect(JSON.parse(calls[0].body!)).toEqual({
+      node: { id: 'g', type: 'code-gate', data: { gateSet: 'evidence-kinds' } },
+      connectTo: { from: 'agent' },
+      expectedRev: 1,
+    });
+
+    await c.connectNodes('wf1', 'a', 'b', { expectedRev: 2 });
+    expect(calls[1].url).toBe('http://home.test/api/canvas/workflows/wf1/connections');
+    expect(JSON.parse(calls[1].body!)).toEqual({ from: 'a', to: 'b', expectedRev: 2 });
+
+    await c.removeNode('wf1', 'g', 3);
+    expect(calls[2].url).toBe('http://home.test/api/canvas/workflows/wf1/nodes/g?expectedRev=3');
+    expect(calls[2].method).toBe('DELETE');
+
+    await c.updateNode('wf1', 'agent', { agent: { disallowedTools: ['Write'] } }, 4);
+    expect(calls[3].url).toBe('http://home.test/api/canvas/workflows/wf1/nodes/agent');
+    expect(calls[3].method).toBe('PATCH');
+    expect(JSON.parse(calls[3].body!)).toEqual({ configMerge: { agent: { disallowedTools: ['Write'] } }, expectedRev: 4 });
+
+    await c.validateWorkflow('wf1');
+    expect(calls[4].url).toBe('http://home.test/api/canvas/workflows/wf1/validate');
+    expect(calls[4].method).toBe('GET');
+    // Every call carried the wallet bearer.
+    for (const call of calls) expect(call.headers['authorization']).toBe('Bearer scwt_TESTTOKEN');
+  });
+
+  it('a 409 revision conflict surfaces as HomeApiError with the status', async () => {
+    const { fetch: f } = captureFetch(() => new Response('{"error":"revision conflict","currentRev":5}', { status: 409 }));
+    const c = client({ fetch: f });
+    await expect(c.addNode('wf1', { id: 'x', type: 'output' }, undefined, 1)).rejects.toMatchObject({ status: 409 });
   });
 
   it('non-2xx becomes a HomeApiError carrying status + body', async () => {

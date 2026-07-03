@@ -47,7 +47,8 @@ export type CanvasNodeStatus =
   | 'running'
   | 'awaiting_approval'
   | 'completed'
-  | 'failed';
+  | 'failed'
+  | 'blocked';
 export type ApprovalDecision = 'approve' | 'reject';
 
 /** The single normalized event home streams from POST /api/canvas/runs. */
@@ -87,6 +88,16 @@ export interface SaveWorkflowInput {
   target?: CanvasTarget;
   localConfig?: Record<string, unknown>;
   remoteConfig?: Record<string, unknown>;
+  /** Optimistic concurrency (SPEC-005 §4): mismatch ⇒ home 409s with currentRev. */
+  expectedRev?: number;
+}
+
+/** Optional one-step wiring when adding a node (SPEC-005 §4). */
+export interface ConnectToSpec {
+  from?: string;
+  to?: string;
+  fromPort?: string;
+  toPort?: string;
 }
 
 export interface RunWorkflowInput {
@@ -217,6 +228,68 @@ export class HomeCanvasClient {
 
   saveWorkflow(input: SaveWorkflowInput): Promise<{ workflow: unknown }> {
     return this.requestJson('POST', '/api/canvas/workflows', input);
+  }
+
+  // ── Typed authoring ops (SPEC-005 §4) — surgical, validated construction ──
+  // Home validates BEFORE persisting (bad DAGs 400 with machine-actionable
+  // codes) and enforces optimistic concurrency (expectedRev mismatch → 409
+  // carrying currentRev). The agent loop is add → connect → validate → run.
+
+  addNode(
+    workflowId: string,
+    node: Record<string, unknown>,
+    connectTo?: ConnectToSpec,
+    expectedRev?: number,
+  ): Promise<{ nodeId: string; rev: number; warnings: unknown[] }> {
+    return this.requestJson('POST', `/api/canvas/workflows/${encodeURIComponent(workflowId)}/nodes`, {
+      node,
+      ...(connectTo ? { connectTo } : {}),
+      ...(expectedRev !== undefined ? { expectedRev } : {}),
+    });
+  }
+
+  connectNodes(
+    workflowId: string,
+    from: string,
+    to: string,
+    opts: { fromPort?: string; toPort?: string; expectedRev?: number } = {},
+  ): Promise<{ connectionId: string; rev: number; warnings: unknown[] }> {
+    return this.requestJson('POST', `/api/canvas/workflows/${encodeURIComponent(workflowId)}/connections`, {
+      from,
+      to,
+      ...(opts.fromPort ? { fromPort: opts.fromPort } : {}),
+      ...(opts.toPort ? { toPort: opts.toPort } : {}),
+      ...(opts.expectedRev !== undefined ? { expectedRev: opts.expectedRev } : {}),
+    });
+  }
+
+  removeNode(
+    workflowId: string,
+    nodeId: string,
+    expectedRev?: number,
+  ): Promise<{ ok: boolean; removed: string; rev: number; warnings: unknown[] }> {
+    const q = expectedRev !== undefined ? `?expectedRev=${expectedRev}` : '';
+    return this.requestJson(
+      'DELETE',
+      `/api/canvas/workflows/${encodeURIComponent(workflowId)}/nodes/${encodeURIComponent(nodeId)}${q}`,
+    );
+  }
+
+  updateNode(
+    workflowId: string,
+    nodeId: string,
+    configMerge: Record<string, unknown>,
+    expectedRev?: number,
+  ): Promise<{ node: unknown; rev: number; warnings: unknown[] }> {
+    return this.requestJson(
+      'PATCH',
+      `/api/canvas/workflows/${encodeURIComponent(workflowId)}/nodes/${encodeURIComponent(nodeId)}`,
+      { configMerge, ...(expectedRev !== undefined ? { expectedRev } : {}) },
+    );
+  }
+
+  validateWorkflow(workflowId: string): Promise<{ valid: boolean; errors: unknown[]; warnings: unknown[] }> {
+    return this.requestJson('GET', `/api/canvas/workflows/${encodeURIComponent(workflowId)}/validate`);
   }
 
   // ── Run history ──────────────────────────────────────────────────────────
