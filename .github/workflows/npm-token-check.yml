@@ -1,0 +1,21 @@
+name: npm token check (temporary diagnostic)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: whoami
+        run: |
+          echo "== npm whoami =="
+          npm whoami || echo "WHOAMI_FAILED"
+          echo "== npm token access to scope =="
+          npm access list packages 2>&1 | head -30 || echo "ACCESS_LIST_FAILED"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
