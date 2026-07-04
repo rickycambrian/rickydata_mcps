@@ -62,8 +62,8 @@ jobs:
             | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{for(const l of d.split('\n')){if(!l.trim())continue;let o;try{o=JSON.parse(l)}catch{continue};if(o.id===2){console.log(o.result.tools.length)}}})")
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
           echo "::notice::canvas-workflows-mcp exposes $COUNT tools"
-          if [ "$COUNT" -ne 7 ]; then
-            echo "::error::Expected 7 tools, got $COUNT"
+          if [ "$COUNT" -ne 12 ]; then
+            echo "::error::Expected 12 tools, got $COUNT"
             exit 1
           fi
 
