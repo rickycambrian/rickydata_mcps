@@ -292,6 +292,44 @@ export class HomeCanvasClient {
     return this.requestJson('GET', `/api/canvas/workflows/${encodeURIComponent(workflowId)}/validate`);
   }
 
+  // ── Issue triage (SPEC-014 W4b) ──────────────────────────────────────────
+  // Home is the SOLE writer/reader of the PRIVATE PriorityScoreSnapshots; these
+  // just drive its authed routes — the same fail-closed wallet boundary.
+
+  listScoredIssues(
+    filters: { repo?: string; difficulty?: string; readinessStatus?: string; limit?: number } = {},
+  ): Promise<{ issues: Array<Record<string, unknown>>; count: number }> {
+    const qs = new URLSearchParams();
+    if (filters.repo) qs.set('repo', filters.repo);
+    if (filters.difficulty) qs.set('difficulty', filters.difficulty);
+    if (filters.readinessStatus) qs.set('readiness_status', filters.readinessStatus);
+    if (filters.limit) qs.set('limit', String(filters.limit));
+    const suffix = qs.size > 0 ? `?${qs.toString()}` : '';
+    return this.requestJson('GET', `/api/issues/scored${suffix}`);
+  }
+
+  /** Approve the scored-issue HITL item → home promotes it to a RoadmapItem. */
+  promoteIssue(input: {
+    repoFullName: string;
+    issueNumber: number;
+    title: string;
+    snapshotNodeId?: string;
+  }): Promise<Record<string, unknown>> {
+    return this.requestJson('POST', '/api/hitl/decision', {
+      item: {
+        id: `issue:${input.repoFullName}#${input.issueNumber}`,
+        kind: 'issue',
+        title: input.title,
+        sourceRef: {
+          label: 'PriorityScoreSnapshot',
+          ...(input.snapshotNodeId ? { nodeId: input.snapshotNodeId } : {}),
+          scope: 'private',
+        },
+      },
+      action: 'approve',
+    });
+  }
+
   // ── Run history ──────────────────────────────────────────────────────────
 
   listRuns(workflowId?: string): Promise<{ runs: unknown[] }> {

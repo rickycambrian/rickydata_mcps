@@ -46,8 +46,8 @@ function client(opts: { signer?: typeof signer | null; fetch: typeof fetch }) {
 }
 
 describe('tool surface', () => {
-  it('exposes exactly the twelve documented tools with unique names', () => {
-    expect(TOOL_NAMES).toHaveLength(12);
+  it('exposes exactly the fourteen documented tools with unique names', () => {
+    expect(TOOL_NAMES).toHaveLength(14);
     expect(new Set(TOOL_NAMES).size).toBe(TOOL_NAMES.length);
     expect([...TOOL_NAMES]).toEqual([
       'list_workflows',
@@ -62,7 +62,47 @@ describe('tool surface', () => {
       'resolve_approval',
       'get_run',
       'list_runs',
+      'issue_triage_list',
+      'issue_triage_promote',
     ]);
+  });
+});
+
+describe('issue triage client (SPEC-014 W4b)', () => {
+  it('issue list hits /api/issues/scored with filters', async () => {
+    let seen: string | null = null;
+    const c = client({
+      fetch: (async (url: RequestInfo | URL) => {
+        seen = String(url);
+        return new Response(JSON.stringify({ issues: [], count: 0 }), { status: 200 });
+      }) as typeof fetch,
+    });
+    await c.listScoredIssues({ repo: 'rickydata_home', readinessStatus: 'ready', limit: 10 });
+    expect(seen).toContain('/api/issues/scored?');
+    expect(seen).toContain('repo=rickydata_home');
+    expect(seen).toContain('readiness_status=ready');
+    expect(seen).toContain('limit=10');
+  });
+
+  it('promote posts the SPEC-013 issue decision shape (suppression-key id, approve verb)', async () => {
+    let body: Record<string, unknown> | null = null;
+    const c = client({
+      fetch: (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        body = JSON.parse(String(init?.body ?? '{}'));
+        return new Response(JSON.stringify({ decision: { verified: true }, issue: { promoted: true } }), { status: 201 });
+      }) as typeof fetch,
+    });
+    await c.promoteIssue({
+      repoFullName: 'rickycambrian/rickydata_home',
+      issueNumber: 13,
+      title: '[rickycambrian/rickydata_home#13] Learn from Karphathy',
+      snapshotNodeId: 'node-1',
+    });
+    const item = (body as unknown as { item: Record<string, unknown>; action: string }).item;
+    expect((body as unknown as { action: string }).action).toBe('approve');
+    expect(item['id']).toBe('issue:rickycambrian/rickydata_home#13');
+    expect(item['kind']).toBe('issue');
+    expect(item['sourceRef']).toEqual({ label: 'PriorityScoreSnapshot', nodeId: 'node-1', scope: 'private' });
   });
 });
 

@@ -92,7 +92,7 @@ export interface RegisterToolsDeps {
   client: HomeCanvasClient;
 }
 
-/** The twelve canvas tools, all backed by home's authenticated routes. */
+/** The fourteen tools (twelve canvas + two issue-triage), all backed by home's authenticated routes. */
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { client } = deps;
 
@@ -331,6 +331,73 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       }
     },
   );
+
+  // ── Issue triage (SPEC-014 W4b) — the fleet's read/act seam over home's ──
+  // durable PRIVATE PriorityScoreSnapshots (rickydata_home is the sole writer).
+
+  server.tool(
+    'issue_triage_list',
+    'The scored GitHub-issue triage list from rickydata_home: latest PRIVATE PriorityScoreSnapshot per issue, deterministic priority_rank ASC (work-this-first). topCandidates:true narrows to ready + tractability ≥ 0.6.',
+    {
+      repo: z.string().optional().describe("Filter to one repo (repo_id like 'rickydata_home' or full 'owner/name')."),
+      readinessStatus: z.enum(['ready', 'marginal', 'needs_info', 'unscored']).optional(),
+      difficulty: z.string().optional().describe('simple | medium | large | complex'),
+      limit: z.number().int().positive().max(500).optional().describe('Max rows (default 50).'),
+      topCandidates: z.boolean().optional().describe('true → only ready issues with tractability ≥ 0.6.'),
+    },
+    async ({ repo, readinessStatus, difficulty, limit, topCandidates }) => {
+      try {
+        const { issues } = await client.listScoredIssues({
+          repo,
+          readinessStatus,
+          difficulty,
+          limit: topCandidates ? 500 : (limit ?? 50),
+        });
+        const rows = topCandidates
+          ? issues
+              .filter(
+                (r) => r['readinessStatus'] === 'ready' && typeof r['tractability'] === 'number' && (r['tractability'] as number) >= 0.6,
+              )
+              .slice(0, limit ?? 50)
+          : issues;
+        return ok({ count: rows.length, issues: rows });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    'issue_triage_promote',
+    "Promote one scored issue into rickydata_home's Mission Control backlog (records a durable HomeDecision, creates/merges the RoadmapItem, links CAPTURES_PRIORITY). Idempotent per issue — the decision suppresses the inbox item.",
+    {
+      repoFullName: z.string().describe("The repo in 'owner/name' form."),
+      issueNumber: z.number().int().positive().describe('The GitHub issue number.'),
+    },
+    async ({ repoFullName, issueNumber }) => {
+      try {
+        // Resolve the issue's latest snapshot first so the decision carries the
+        // real title + snapshot node id (the CAPTURES_PRIORITY edge source).
+        const { issues } = await client.listScoredIssues({ repo: repoFullName, limit: 500 });
+        const row = issues.find((r) => r['issueNumber'] === issueNumber);
+        if (!row) {
+          throw new Error(
+            `no scored snapshot for ${repoFullName}#${issueNumber} — run a scan in home first (the triage list only covers scanned issues)`,
+          );
+        }
+        return ok(
+          await client.promoteIssue({
+            repoFullName,
+            issueNumber,
+            title: `[${repoFullName}#${issueNumber}] ${String(row['title'] ?? '')}`,
+            snapshotNodeId: typeof row['nodeId'] === 'string' ? (row['nodeId'] as string) : undefined,
+          }),
+        );
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
 }
 
 /** The tool names this MCP exposes — single source of truth for tests/docs. */
@@ -347,4 +414,6 @@ export const TOOL_NAMES = [
   'resolve_approval',
   'get_run',
   'list_runs',
+  'issue_triage_list',
+  'issue_triage_promote',
 ] as const;
