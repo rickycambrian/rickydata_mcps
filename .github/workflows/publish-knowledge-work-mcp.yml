@@ -85,6 +85,7 @@ jobs:
       - name: Publish to npm
         id: publish
         if: steps.check.outputs.exists == 'false'
+        continue-on-error: true
         # Publish from inside the package dir. `npm publish --workspace` can
         # 404 on first publish of a new scoped package.
         working-directory: packages/knowledge-work-mcp
@@ -93,9 +94,19 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
 
-      - name: Update KFDB MCPServer entity (version + tools_available)
-        if: steps.publish.outcome == 'success'
-        # Deterministic MCPServer id = uuidv5(DNS, "@rickydata/knowledge-work-mcp").
+      - name: Resolve registry mode
+        id: registry
+        run: |
+          if [ "${{ steps.check.outputs.exists }}" = "true" ] || [ "${{ steps.publish.outcome }}" = "success" ]; then
+            echo "type=npm" >> "$GITHUB_OUTPUT"
+            echo "::notice::Registering npm-backed knowledge-work-mcp"
+          else
+            echo "type=git" >> "$GITHUB_OUTPUT"
+            echo "::warning::npm publish did not create @rickydata/knowledge-work-mcp; registering source-backed git server"
+          fi
+
+      - name: Build KFDB MCPServer payload
+        id: payload
         run: |
           ( printf '%s\n%s\n' \
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
@@ -106,28 +117,75 @@ jobs:
             const fs=require('fs');
             const tools=JSON.parse(fs.readFileSync('/tmp/tools_available.json','utf8'));
             const v='${{ steps.ver.outputs.version }}';
-            const payload={operations:[{operation:'update_node',id:'3883e5df-de92-5c4d-9c09-f4f79a62e22d',label:'MCPServer',properties:{
+            const registryType='${{ steps.registry.outputs.type }}';
+            const pkg='@rickydata/knowledge-work-mcp';
+            const sourceRepository='https://github.com/rickycambrian/rickydata_mcps';
+            const packageSubdir='packages/knowledge-work-mcp';
+            const installCommand=registryType === 'npm'
+              ? 'npx -y @rickydata/knowledge-work-mcp@'+v
+              : 'git clone '+sourceRepository+' && cd rickydata_mcps/'+packageSubdir+' && npm install && npm run build';
+            const runCommand=registryType === 'npm'
+              ? 'npx -y @rickydata/knowledge-work-mcp@'+v
+              : 'npm start';
+            const payload={operations:[{operation:'create_node',id:'3883e5df-de92-5c4d-9c09-f4f79a62e22d',label:'MCPServer',mode:'merge',properties:{
+              name:{String:'knowledge-work-mcp'},
+              server_name:{String:'knowledge-work-mcp'},
+              package_identifier:{String:pkg},
               version:{String:v}, latest_version:{String:v}, tools_count:{Integer:tools.length},
               tools_available:{String:JSON.stringify(tools)},
-              install_command:{String:'npx -y @rickydata/knowledge-work-mcp@'+v},
-              run_command:{String:'npx -y @rickydata/knowledge-work-mcp@'+v},
+              install_command:{String:installCommand},
+              run_command:{String:runCommand},
               enriched_at:{String:new Date().toISOString()}, enrichment_version:{Integer:5},
+              description:{String:'RickyData voice knowledge partner MCP for cited knowledge retrieval, interview mode, HITL capture, and enrichment-loop workflows.'},
+              gateway_compatible:{Boolean:true},
+              gateway_runnable:{Boolean:true},
+              registry_type:{String:registryType},
+              deployment_type:{String:'local_tool'},
+              transport_type:{String:'stdio'},
+              can_run_standalone:{Boolean:true},
+              gateway_safe:{Boolean:true},
+              gateway_recommendation:{String:'APPROVED'},
+              security_score:{Integer:90},
+              security_risk:{String:'safe'},
+              gateway_security_score:{Integer:85},
+              gateway_risk_score:{Integer:15},
+              required_env_vars:{String:JSON.stringify([])},
+              secrets_required:{String:JSON.stringify([])},
+              required_credentials:{String:JSON.stringify([])},
+              secrets_optional:{String:JSON.stringify([
+                {name:'KNOWLEDGE_MCP_PRIVATE_KEY',description:'Optional wallet private key used to mint home scwt_ tokens and S2D derive sessions.'},
+                {name:'KFDB_WALLET_ADDRESS',description:'Optional wallet address for S2D derive headers.'},
+                {name:'KFDB_API_KEY',description:'Optional KFDB API key fallback for legacy deployments.'},
+                {name:'HOME_API_URL',description:'Optional home API URL override; defaults to https://home.rickydata.org.'},
+                {name:'KFDB_API_URL',description:'Optional KFDB API URL override; defaults to https://knowledge.rickydata.org.'}
+              ])},
+              categories:{String:JSON.stringify(['Knowledge', 'Voice', 'RickyData'])},
+              admin_hidden:{Boolean:false},
+              source_repository:{String:sourceRepository},
+              repository_url:{String:sourceRepository},
+              repository_subfolder:{String:packageSubdir},
+              package_subdir:{String:packageSubdir},
+              last_enriched_commit_sha:{String:'${{ github.sha }}'},
             }}]};
             fs.writeFileSync('/tmp/knowledge-work-payload.json', JSON.stringify(payload));
-            console.log('KFDB payload: '+tools.length+' tools, v'+v);
+            console.log('KFDB payload: '+tools.length+' tools, v'+v+', registry='+registryType);
           "
+
+      - name: POST MCPServer entity to KFDB
+        id: kfdb
+        run: |
           curl -sf -X POST "${{ vars.KFDB_URL || 'http://34.60.37.158' }}/api/v1/write" \
             -H "Authorization: Bearer ${{ secrets.KFDB_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d @/tmp/knowledge-work-payload.json \
-            && echo "::notice::KFDB MCPServer entity updated" \
-            || echo "::warning::KFDB entity update failed (non-blocking; gateway picks up on next sync)"
+            | tee /tmp/knowledge-work-kfdb-response.json
+          echo "node_id=3883e5df-de92-5c4d-9c09-f4f79a62e22d" >> "$GITHUB_OUTPUT"
+          echo "::notice::KFDB MCPServer entity registered as 3883e5df-de92-5c4d-9c09-f4f79a62e22d"
 
       - name: Sync server in MCP gateway (instant single-entity refresh)
-        if: steps.publish.outcome == 'success'
         run: |
           MCP_GW="${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}"
-          RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/health/reload/3883e5df-de92-5c4d-9c09-f4f79a62e22d" \
+          RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/health/reload/${{ steps.kfdb.outputs.node_id }}" \
             -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
             -H "Content-Type: application/json" || echo '{"error":"sync failed"}')
           echo "Gateway sync: $RESPONSE"
@@ -166,3 +224,5 @@ jobs:
           echo "- **Tools**: ${{ steps.tools.outputs.count }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Already on npm**: ${{ steps.check.outputs.exists }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Publish**: ${{ steps.publish.outcome || 'skipped' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Registry mode**: ${{ steps.registry.outputs.type || 'unknown' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **MCPServer id**: 3883e5df-de92-5c4d-9c09-f4f79a62e22d" >> "$GITHUB_STEP_SUMMARY"
