@@ -15,7 +15,7 @@ const server = new McpServer({
 
 const env = process.env;
 const signer = loadSignerFromEnv(env);
-const kfdbApiUrl = env.KFDB_API_URL?.trim() || 'http://34.60.37.158';
+const kfdbApiUrl = env.KFDB_API_URL?.trim() || 'https://db.rickydata.org';
 const home = new HomeKnowledgeClient({
   baseUrl: env.HOME_API_URL?.trim() || 'https://home.rickydata.org',
   signer,

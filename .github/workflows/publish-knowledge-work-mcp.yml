@@ -160,6 +160,7 @@ jobs:
               secrets_required:{String:JSON.stringify(optionalSecrets)},
               required_credentials:{String:JSON.stringify([])},
               secrets_optional:{String:JSON.stringify(optionalSecrets)},
+              external_services:{String:JSON.stringify(['rickydata'])},
               categories:{String:JSON.stringify(['Knowledge', 'Voice', 'RickyData'])},
               admin_hidden:{Boolean:false},
               source_repository:{String:sourceRepository},
