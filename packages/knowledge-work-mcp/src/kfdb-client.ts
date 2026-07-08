@@ -17,6 +17,115 @@ export interface SemanticSearchInput {
   limit: number;
 }
 
+type WikiPageRow = {
+  slug: string;
+  kind: string;
+  title: string;
+  summary: string;
+  bodyMd: string;
+  status: string;
+  sourceCount: number;
+  lastCompiledAt: string;
+  compilerVersion: string;
+  nodeId: string;
+};
+
+type WikiClaimRow = {
+  id: string;
+  pageSlug: string;
+  text: string;
+  confidenceTier: string;
+  confidenceScore: number;
+  status: string;
+  sourceRef: string;
+  updatedAt: string;
+  verified?: boolean;
+};
+
+type KnowledgeBundle = {
+  pages?: Array<Record<string, unknown>>;
+  claims?: Array<Record<string, unknown>>;
+  diagnostics?: Record<string, unknown>;
+  reproducibility_hash?: string;
+};
+
+function unwrap(value: unknown): string | number | boolean | undefined {
+  if (value == null || value === 'Null') return undefined;
+  if (typeof value === 'object') {
+    const v = value as Record<string, unknown>;
+    if ('String' in v) {
+      const s = v['String'];
+      return typeof s === 'string' && s.startsWith('__enc_') ? undefined : (s as string);
+    }
+    if ('Integer' in v) return v['Integer'] as number;
+    if ('Float' in v) return v['Float'] as number;
+    if ('Boolean' in v) return v['Boolean'] as boolean;
+    return undefined;
+  }
+  if (typeof value === 'string' && value.startsWith('__enc_')) return undefined;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  return undefined;
+}
+
+function unwrapRow(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    const unwrapped = unwrap(value);
+    if (unwrapped !== undefined) out[key] = unwrapped;
+  }
+  return out;
+}
+
+function rowsOf(response: unknown): Record<string, unknown>[] {
+  const r = response as { data?: unknown; rows?: unknown };
+  const arr = r?.data ?? r?.rows;
+  return Array.isArray(arr) ? (arr as Record<string, unknown>[]) : [];
+}
+
+function str(row: Record<string, unknown>, key: string): string {
+  const value = unwrap(row[key]);
+  return typeof value === 'string' ? value : '';
+}
+
+function num(row: Record<string, unknown>, key: string): number {
+  const value = unwrap(row[key]);
+  return typeof value === 'number' ? value : 0;
+}
+
+function wikiPageOf(row: Record<string, unknown>): WikiPageRow | null {
+  const unwrapped = unwrapRow(row);
+  const slug = str(row, 'slug');
+  if (!slug || unwrapped['rickydata_wiki_schema_version'] !== 'v1') return null;
+  return {
+    slug,
+    kind: str(row, 'kind'),
+    title: str(row, 'title'),
+    summary: str(row, 'summary'),
+    bodyMd: str(row, 'body_md'),
+    status: str(row, 'status') || 'active',
+    sourceCount: num(row, 'source_count'),
+    lastCompiledAt: str(row, 'last_compiled_at'),
+    compilerVersion: str(row, 'compiler_version'),
+    nodeId: str(row, '_id'),
+  };
+}
+
+function wikiClaimOf(row: Record<string, unknown>): WikiClaimRow | null {
+  const unwrapped = unwrapRow(row);
+  const pageSlug = str(row, 'page_slug');
+  if (!pageSlug || unwrapped['rickydata_wiki_schema_version'] !== 'v1') return null;
+  return {
+    id: str(row, '_id'),
+    pageSlug,
+    text: str(row, 'text'),
+    confidenceTier: str(row, 'confidence_tier'),
+    confidenceScore: num(row, 'confidence_score'),
+    status: str(row, 'status') || 'active',
+    sourceRef: str(row, 'source_ref'),
+    updatedAt: str(row, 'updated_at'),
+  };
+}
+
 export class KfdbKnowledgeClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
@@ -96,6 +205,99 @@ export class KfdbKnowledgeClient {
     question_limit?: number;
   }): Promise<unknown> {
     return this.postJson('/api/v1/agent/knowledge', params, await this.headersWithOptionalS2D());
+  }
+
+  private async queryKql(query: string): Promise<Record<string, unknown>[]> {
+    const res = await this.postJson('/api/v1/query', { query }, await this.headersWithOptionalS2D());
+    return rowsOf(res);
+  }
+
+  async wikiSearch(query: string, limit = 5): Promise<unknown> {
+    const bundle = (await this.knowledgeBundle({
+      query,
+      token_budget: 2500,
+      page_limit: Math.max(limit, 5),
+      claim_limit: 20,
+      include_questions: false,
+    })) as KnowledgeBundle;
+    const pages = Array.isArray(bundle.pages) ? bundle.pages : [];
+    return {
+      hits: pages.slice(0, limit).map((page) => ({
+        slug: String(page['slug'] ?? ''),
+        title: String(page['title'] ?? ''),
+        summary: String(page['summary'] ?? ''),
+        kind: String(page['kind'] ?? ''),
+        score: typeof page['score'] === 'number' ? page['score'] : 0,
+        source: 'kfdb_bundle',
+        verifiedClaimCount: typeof page['verified_claim_count'] === 'number' ? page['verified_claim_count'] : 0,
+        claimCount: typeof page['claim_count'] === 'number' ? page['claim_count'] : 0,
+      })),
+      fallback: {
+        source: 'kfdb_agent_knowledge',
+        reason: 'home wiki route unavailable',
+        diagnostics: bundle.diagnostics ?? {},
+        reproducibility_hash: bundle.reproducibility_hash,
+      },
+    };
+  }
+
+  async wikiPage(slug: string): Promise<unknown> {
+    const target = slug.trim();
+    const [pageRows, claimRows, bundle] = await Promise.all([
+      this.queryKql('MATCH (n:WikiPage) RETURN n.* LIMIT 1000'),
+      this.queryKql('MATCH (n:WikiClaim) RETURN n.* LIMIT 2000'),
+      this.knowledgeBundle({
+        query: target,
+        token_budget: 6000,
+        page_limit: 10,
+        claim_limit: 200,
+        include_questions: false,
+      }) as Promise<KnowledgeBundle>,
+    ]);
+
+    const page = pageRows.map(wikiPageOf).find((p): p is WikiPageRow => p !== null && p.slug === target);
+    if (!page) throw new ApiError('kfdb', 404, `wiki page not found: ${target}`);
+
+    const verifiedById = new Map<string, boolean>();
+    for (const claim of Array.isArray(bundle.claims) ? bundle.claims : []) {
+      const id = String(claim['id'] ?? '');
+      if (!id) continue;
+      verifiedById.set(id, claim['verified'] === true);
+    }
+
+    const claims = claimRows
+      .map(wikiClaimOf)
+      .filter((claim): claim is WikiClaimRow => claim !== null && claim.pageSlug === target && claim.status !== 'retracted')
+      .map((claim) => ({
+        ...claim,
+        verified: verifiedById.get(claim.id) === true,
+      }));
+
+    return {
+      page: {
+        slug: page.slug,
+        title: page.title,
+        kind: page.kind,
+        summary: page.summary,
+        bodyMd: page.bodyMd,
+        body_md: page.bodyMd,
+        status: page.status,
+        sourceCount: page.sourceCount,
+        lastCompiledAt: page.lastCompiledAt,
+        compilerVersion: page.compilerVersion,
+        nodeId: page.nodeId,
+      },
+      claims,
+      verifiedClaimIds: claims.filter((claim) => claim.verified).map((claim) => claim.id),
+      history: [],
+      backlinks: [],
+      fallback: {
+        source: 'kfdb_query',
+        reason: 'home wiki route unavailable',
+        diagnostics: bundle.diagnostics ?? {},
+        reproducibility_hash: bundle.reproducibility_hash,
+      },
+    };
   }
 
   async semanticSearch(input: SemanticSearchInput): Promise<unknown> {

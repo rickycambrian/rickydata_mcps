@@ -18,6 +18,12 @@ function requireKfdb(client: KfdbKnowledgeClient | null): KfdbKnowledgeClient {
   return client;
 }
 
+function fallbackReason(err: unknown): Record<string, unknown> {
+  return {
+    home_error: err instanceof Error ? err.message : String(err),
+  };
+}
+
 const labelsSchema = z
   .array(z.string())
   .optional()
@@ -92,6 +98,13 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       try {
         return ok(await home.wikiSearch(query, limit));
       } catch (err) {
+        if (kfdb) {
+          try {
+            return ok({ ...(await kfdb.wikiSearch(query, limit) as Record<string, unknown>), ...fallbackReason(err) });
+          } catch {
+            /* Preserve the original home failure; the fallback is best-effort for read availability. */
+          }
+        }
         return fail(err);
       }
     },
@@ -105,6 +118,13 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       try {
         return ok(await home.wikiPage(slug));
       } catch (err) {
+        if (kfdb) {
+          try {
+            return ok({ ...(await kfdb.wikiPage(slug) as Record<string, unknown>), ...fallbackReason(err) });
+          } catch {
+            /* Preserve the original home failure; the fallback is best-effort for read availability. */
+          }
+        }
         return fail(err);
       }
     },

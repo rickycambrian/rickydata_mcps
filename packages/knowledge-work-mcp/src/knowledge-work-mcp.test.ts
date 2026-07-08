@@ -118,6 +118,101 @@ describe('KFDB read/write auth split', () => {
       'x-derive-key': 'abc123',
     });
   });
+
+  it('maps direct KFDB knowledge bundle pages into wiki search hits', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        pages: [
+          {
+            slug: 'voice-guide',
+            title: 'The VoiceGuide overlay',
+            summary: 'Voice overlay facts.',
+            kind: 'subsystem',
+            score: 1,
+            verified_claim_count: 2,
+            claim_count: 3,
+          },
+        ],
+        claims: [],
+        diagnostics: { s2d_active: true, total_ms: 20 },
+        reproducibility_hash: 'hash',
+      }),
+    );
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.wikiSearch('voice guide', 5)).resolves.toMatchObject({
+      hits: [{ slug: 'voice-guide', source: 'kfdb_bundle', verifiedClaimCount: 2 }],
+      fallback: { source: 'kfdb_agent_knowledge', reproducibility_hash: 'hash' },
+    });
+  });
+
+  it('reads direct KFDB wiki page rows and overlays verified claim flags from the bundle', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as { query?: string };
+      if (body.query?.includes('WikiPage')) {
+        return jsonResponse({
+          data: [
+            {
+              _id: { String: 'wiki-page:voice-guide' },
+              slug: { String: 'voice-guide' },
+              kind: { String: 'subsystem' },
+              title: { String: 'The VoiceGuide overlay' },
+              summary: { String: 'Voice overlay facts.' },
+              body_md: { String: '# VoiceGuide' },
+              status: { String: 'active' },
+              source_count: { Integer: 3 },
+              last_compiled_at: { String: '2026-07-08T12:00:00.000Z' },
+              compiler_version: { String: 'test' },
+              rickydata_wiki_schema_version: { String: 'v1' },
+            },
+          ],
+        });
+      }
+      if (body.query?.includes('WikiClaim')) {
+        return jsonResponse({
+          data: [
+            {
+              _id: { String: 'claim:voice-guide:1' },
+              page_slug: { String: 'voice-guide' },
+              text: { String: 'VoiceGuide uses home companion events.' },
+              confidence_tier: { String: 'EXTRACTED' },
+              confidence_score: { Float: 1 },
+              status: { String: 'active' },
+              source_ref: { String: 'wiki-page:voice-guide' },
+              updated_at: { String: '2026-07-08T12:00:00.000Z' },
+              rickydata_wiki_schema_version: { String: 'v1' },
+            },
+          ],
+        });
+      }
+      return jsonResponse({
+        pages: [],
+        claims: [{ id: 'claim:voice-guide:1', page_slug: 'voice-guide', verified: true }],
+        diagnostics: { s2d_active: true },
+        reproducibility_hash: 'hash',
+      });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.wikiPage('voice-guide')).resolves.toMatchObject({
+      page: { slug: 'voice-guide', body_md: '# VoiceGuide' },
+      claims: [{ id: 'claim:voice-guide:1', verified: true }],
+      verifiedClaimIds: ['claim:voice-guide:1'],
+      fallback: { source: 'kfdb_query', reproducibility_hash: 'hash' },
+    });
+  });
 });
 
 describe('compiler-safe capture atoms', () => {
