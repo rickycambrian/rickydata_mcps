@@ -16,14 +16,15 @@ const server = new McpServer({
 const env = process.env;
 const signer = loadSignerFromEnv(env);
 const kfdbApiUrl = env.KFDB_API_URL?.trim() || 'https://db.rickydata.org';
-const home = new HomeKnowledgeClient({
-  baseUrl: env.HOME_API_URL?.trim() || 'https://rickydata-home-2dbp4scmrq-uc.a.run.app',
-  signer,
-});
 const s2d =
   kfdbApiUrl && env.KNOWLEDGE_MCP_PRIVATE_KEY?.trim()
     ? new S2DSessionManager(kfdbApiUrl, env.KNOWLEDGE_MCP_PRIVATE_KEY.trim())
     : null;
+const home = new HomeKnowledgeClient({
+  baseUrl: env.HOME_API_URL?.trim() || 'https://rickydata-home-2dbp4scmrq-uc.a.run.app',
+  signer,
+  s2d,
+});
 const kfdb = loadKfdbClientFromEnv({ ...env, KFDB_API_URL: kfdbApiUrl }, s2d);
 
 registerTools(server, { home, kfdb });

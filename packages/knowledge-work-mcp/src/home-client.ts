@@ -5,10 +5,12 @@ import {
 } from './wallet-token.js';
 import { ApiError, FailClosedError } from './errors.js';
 import { stableVoiceId } from './ids.js';
+import type { S2DProvider } from './s2d.js';
 
 export interface HomeClientDeps {
   baseUrl: string;
   signer: WalletSigner | null;
+  s2d?: S2DProvider | null;
   fetchImpl?: typeof fetch;
   mintToken?: (opts: MintWalletTokenOptions) => Promise<string>;
   tokenTtlSeconds?: number;
@@ -28,6 +30,7 @@ type QueueItem = {
 export class HomeKnowledgeClient {
   private readonly baseUrl: string;
   private readonly signer: WalletSigner | null;
+  private readonly s2d: S2DProvider | null;
   private readonly fetchImpl: typeof fetch;
   private readonly mintToken: (opts: MintWalletTokenOptions) => Promise<string>;
   private readonly tokenTtlSeconds?: number;
@@ -35,6 +38,7 @@ export class HomeKnowledgeClient {
   constructor(deps: HomeClientDeps) {
     this.baseUrl = deps.baseUrl.replace(/\/$/, '');
     this.signer = deps.signer;
+    this.s2d = deps.s2d ?? null;
     this.fetchImpl = deps.fetchImpl ?? fetch;
     this.mintToken = deps.mintToken ?? defaultMintWalletToken;
     this.tokenTtlSeconds = deps.tokenTtlSeconds;
@@ -59,12 +63,27 @@ export class HomeKnowledgeClient {
     return `Bearer ${token}`;
   }
 
+  private async requiredS2DHeaders(): Promise<Record<string, string>> {
+    if (!this.s2d) {
+      throw new FailClosedError(
+        'No sign-to-derive session provider: set KNOWLEDGE_MCP_PRIVATE_KEY so home tools can read wallet-private data. Home-backed tools fail closed.',
+      );
+    }
+    const creds = await this.s2d.ensure();
+    if (!creds) throw new FailClosedError('Sign-to-derive session unavailable; refusing home request before network egress.');
+    return {
+      'x-derive-session-id': creds.sessionId,
+      'x-derive-key': creds.keyHex,
+    };
+  }
+
   private async requestJson<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers: {
         accept: 'application/json',
         authorization: await this.authHeader(),
+        ...(await this.requiredS2DHeaders()),
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,

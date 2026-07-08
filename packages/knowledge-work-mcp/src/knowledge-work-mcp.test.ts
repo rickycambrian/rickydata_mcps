@@ -17,6 +17,41 @@ describe('home auth fail-closed', () => {
     await expect(home.wikiSearch('hitl')).rejects.toBeInstanceOf(FailClosedError);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it('refuses home-backed tools before fetch when no S2D session provider is configured', async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const home = new HomeKnowledgeClient({
+      baseUrl: 'https://home.test',
+      signer: { address: '0x1111111111111111111111111111111111111111', signMessage: async () => '0xsig' },
+      mintToken: async () => 'scwt_test',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(home.wikiSearch('hitl')).rejects.toBeInstanceOf(FailClosedError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('adds S2D headers to home-backed requests', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ results: [] }));
+    const home = new HomeKnowledgeClient({
+      baseUrl: 'https://home.test',
+      signer: { address: '0x1111111111111111111111111111111111111111', signMessage: async () => '0xsig' },
+      mintToken: async () => 'scwt_test',
+      s2d: {
+        ensure: async () => ({ sessionId: 's2d-session', keyHex: 'a'.repeat(64), walletAddress: '0x1111111111111111111111111111111111111111' }),
+      },
+      fetchImpl,
+    });
+
+    await home.wikiSearch('hitl');
+    const init = fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect(init.headers).toMatchObject({
+      authorization: 'Bearer scwt_test',
+      'x-derive-session-id': 's2d-session',
+      'x-derive-key': 'a'.repeat(64),
+    });
+  });
 });
 
 describe('KFDB read/write auth split', () => {
