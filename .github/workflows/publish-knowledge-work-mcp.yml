@@ -121,6 +121,13 @@ jobs:
             const pkg='@rickydata/knowledge-work-mcp';
             const sourceRepository='https://github.com/rickycambrian/rickydata_mcps';
             const packageSubdir='packages/knowledge-work-mcp';
+            const optionalSecrets=[
+              {name:'KNOWLEDGE_MCP_PRIVATE_KEY',description:'Wallet private key used to mint home scwt_ tokens and S2D derive sessions.',required:false},
+              {name:'KFDB_WALLET_ADDRESS',description:'Wallet address for S2D derive headers.',required:false},
+              {name:'KFDB_API_KEY',description:'KFDB API key fallback for legacy deployments.',required:false},
+              {name:'HOME_API_URL',description:'Home API URL override; defaults to https://home.rickydata.org.',required:false},
+              {name:'KFDB_API_URL',description:'KFDB API URL override; defaults to https://knowledge.rickydata.org.',required:false}
+            ];
             const installCommand=registryType === 'npm'
               ? 'npx -y @rickydata/knowledge-work-mcp@'+v
               : 'git clone '+sourceRepository+' && cd rickydata_mcps/'+packageSubdir+' && npm install && npm run build';
@@ -150,15 +157,9 @@ jobs:
               gateway_security_score:{Integer:85},
               gateway_risk_score:{Integer:15},
               required_env_vars:{String:JSON.stringify([])},
-              secrets_required:{String:JSON.stringify([])},
+              secrets_required:{String:JSON.stringify(optionalSecrets)},
               required_credentials:{String:JSON.stringify([])},
-              secrets_optional:{String:JSON.stringify([
-                {name:'KNOWLEDGE_MCP_PRIVATE_KEY',description:'Optional wallet private key used to mint home scwt_ tokens and S2D derive sessions.'},
-                {name:'KFDB_WALLET_ADDRESS',description:'Optional wallet address for S2D derive headers.'},
-                {name:'KFDB_API_KEY',description:'Optional KFDB API key fallback for legacy deployments.'},
-                {name:'HOME_API_URL',description:'Optional home API URL override; defaults to https://home.rickydata.org.'},
-                {name:'KFDB_API_URL',description:'Optional KFDB API URL override; defaults to https://knowledge.rickydata.org.'}
-              ])},
+              secrets_optional:{String:JSON.stringify(optionalSecrets)},
               categories:{String:JSON.stringify(['Knowledge', 'Voice', 'RickyData'])},
               admin_hidden:{Boolean:false},
               source_repository:{String:sourceRepository},
