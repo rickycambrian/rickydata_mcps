@@ -125,8 +125,8 @@ jobs:
               {name:'KNOWLEDGE_MCP_PRIVATE_KEY',description:'Wallet private key used to mint home scwt_ tokens and S2D derive sessions.',required:false},
               {name:'KFDB_WALLET_ADDRESS',description:'Wallet address for S2D derive headers.',required:false},
               {name:'KFDB_API_KEY',description:'KFDB API key fallback for legacy deployments.',required:false},
-              {name:'HOME_API_URL',description:'Home API URL override; defaults to https://home.rickydata.org.',required:false},
-              {name:'KFDB_API_URL',description:'KFDB API URL override; defaults to https://knowledge.rickydata.org.',required:false}
+              {name:'HOME_API_URL',description:'Home API URL override; defaults to https://rickydata-home-2dbp4scmrq-uc.a.run.app.',required:false},
+              {name:'KFDB_API_URL',description:'KFDB API URL override; defaults to https://db.rickydata.org.',required:false}
             ];
             const installCommand=registryType === 'npm'
               ? 'npx -y @rickydata/knowledge-work-mcp@'+v

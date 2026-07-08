@@ -17,7 +17,7 @@ const env = process.env;
 const signer = loadSignerFromEnv(env);
 const kfdbApiUrl = env.KFDB_API_URL?.trim() || 'https://db.rickydata.org';
 const home = new HomeKnowledgeClient({
-  baseUrl: env.HOME_API_URL?.trim() || 'https://home.rickydata.org',
+  baseUrl: env.HOME_API_URL?.trim() || 'https://rickydata-home-2dbp4scmrq-uc.a.run.app',
   signer,
 });
 const s2d =

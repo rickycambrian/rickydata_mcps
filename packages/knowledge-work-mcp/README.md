@@ -13,7 +13,7 @@ second-brain tool surface over KFDB and rickydata_home:
 | Env | Required | Purpose |
 | --- | --- | --- |
 | `KNOWLEDGE_MCP_PRIVATE_KEY` | Required for home tools and KFDB writes | Mints `scwt_` home auth tokens and sign-to-derive sessions. No key means home tools fail before network egress and capture tools refuse. |
-| `HOME_API_URL` | Optional | rickydata_home base URL. Defaults to `http://localhost:8788`. |
+| `HOME_API_URL` | Optional | rickydata_home base URL. Defaults to `https://rickydata-home-2dbp4scmrq-uc.a.run.app`. |
 | `KFDB_API_URL` | Required for KFDB tools | KFDB API base URL. |
 | `KFDB_API_KEY` | Required for KFDB tools | Bearer for KFDB API calls. |
 | `KFDB_WALLET_ADDRESS` | Optional | Wallet tenant header when no private key is available. With `KNOWLEDGE_MCP_PRIVATE_KEY`, the S2D wallet address is used. |
