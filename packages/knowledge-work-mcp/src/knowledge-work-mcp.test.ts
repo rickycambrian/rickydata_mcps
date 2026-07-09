@@ -301,6 +301,74 @@ describe('KFDB read/write auth split', () => {
     expect(trace.page).not.toHaveProperty('bodyMd');
     expect(trace.page).not.toHaveProperty('body_md');
   });
+
+  it('ranks direct KFDB OpenQuestion rows for next_questions fallback', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as { query?: string };
+      if (body.query?.includes('OpenQuestion')) {
+        return jsonResponse({
+          data: [
+            {
+              _id: { String: 'oq-live' },
+              question: { String: 'Which voice-relay commit last streamed from the Core2 device?' },
+              question_kind: { String: 'question' },
+              why_it_matters: { String: 'Blocks the device proof.' },
+              category: { String: 'voice' },
+              source_ref: { String: 'voice-proof:t4' },
+              created_at: { String: '2026-01-01T00:00:00.000Z' },
+              priority: { Integer: 7 },
+              status: { String: 'open' },
+            },
+            {
+              _id: { String: 'oq-answered' },
+              question: { String: 'Which stale question is already answered?' },
+              answer: { String: 'Already answered.' },
+              status: { String: 'answered' },
+            },
+          ],
+        });
+      }
+      if (body.query?.includes('RoadmapItem')) {
+        return jsonResponse({
+          data: [
+            {
+              _id: { String: 'roadmap:voice-relay' },
+              roadmap_item_id: { String: 'voice-relay' },
+              name: { String: 'Core2 voice relay' },
+              status: { String: 'in_progress' },
+            },
+          ],
+        });
+      }
+      return jsonResponse({ data: [] });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.nextQuestions({ limit: 3 })).resolves.toMatchObject({
+      ranked: [
+        {
+          id: 'oq-live',
+          question: 'Which voice-relay commit last streamed from the Core2 device?',
+          questionKind: 'question',
+          value: 0.5,
+          components: { blocking: 1, gap: 0.5, freshness: 1, answerability: 1 },
+          answerability: { phrasing: 'specific', rewriteHint: null },
+          blockingRefs: ['voice-relay'],
+          whyItMatters: 'Blocks the device proof.',
+          category: 'voice',
+          sourceRef: 'voice-proof:t4',
+        },
+      ],
+      total_ranked: 1,
+      fallback: { source: 'kfdb_open_questions', total_open: 1 },
+    });
+  });
 });
 
 describe('trace fallback detection', () => {

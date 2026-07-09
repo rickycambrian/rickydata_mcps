@@ -49,6 +49,78 @@ type KnowledgeBundle = {
   reproducibility_hash?: string;
 };
 
+type QuestionKind = 'question' | 'assumption' | 'clarification';
+
+type OpenQuestionView = {
+  id: string;
+  question: string;
+  questionKind: QuestionKind;
+  answer: string;
+  whyItMatters: string;
+  category: string;
+  sourceRef: string;
+  createdAt: string;
+  ageDays: number | null;
+  rotting: boolean;
+  priority: number;
+};
+
+type RoadmapItemRow = {
+  slug: string;
+  name: string;
+  status: string;
+};
+
+const QUESTION_ROT_DAYS = 14;
+const BLOCKING_IN_PROGRESS = 1.0;
+const BLOCKING_NEXT = 0.7;
+const BLOCKING_BASELINE = 0.2;
+
+const COMPLIMENT_CUES = [
+  'do you like',
+  'do you love',
+  'is this cool',
+  'is this a good idea',
+  'is it a good idea',
+  'would this be good',
+  'would it be good',
+  'what do you think of',
+  'sound good',
+];
+
+const HYPOTHETICAL_CUES = [
+  'would you',
+  'do you think',
+  'could it be',
+  'should we',
+  'should i',
+  'in the future',
+  'hypothetically',
+  'imagine',
+  'if you had',
+  'if we had',
+  'might you',
+  'ever want',
+  'ever need',
+  'would it help',
+];
+
+const PAST_BEHAVIOR_CUES = [
+  'which ',
+  'what did',
+  'what was',
+  'when did',
+  'when was',
+  'how did',
+  'how many',
+  'where did',
+  'where is',
+  'who ',
+  'which wallet',
+  'which commit',
+  'last time',
+];
+
 function unwrap(value: unknown): string | number | boolean | undefined {
   if (value == null || value === 'Null') return undefined;
   if (typeof value === 'object') {
@@ -124,6 +196,147 @@ function wikiClaimOf(row: Record<string, unknown>): WikiClaimRow | null {
     sourceRef: str(row, 'source_ref'),
     updatedAt: str(row, 'updated_at'),
   };
+}
+
+function normalizeQuestionKind(raw: string): QuestionKind {
+  return raw === 'assumption' || raw === 'clarification' ? raw : 'question';
+}
+
+function openQuestionOf(row: Record<string, unknown>, now: Date): OpenQuestionView | null {
+  const unwrapped = unwrapRow(row);
+  if (!Object.keys(unwrapped).some((key) => !key.startsWith('_'))) return null;
+  const id = str(row, '_id');
+  if (!id) return null;
+  const status = str(row, 'status');
+  const answer = str(row, 'answer');
+  const violated = status === 'violated';
+  const answered = !violated && (status === 'answered' || status === 'resolved' || answer.trim().length > 0);
+  if (answered || violated) return null;
+  const createdAt = str(row, 'created_at');
+  const createdMs = Date.parse(createdAt);
+  const ageDays = Number.isNaN(createdMs) ? null : Math.max(0, Math.floor((now.getTime() - createdMs) / 86_400_000));
+  return {
+    id,
+    question: str(row, 'question') || 'Open question',
+    questionKind: normalizeQuestionKind(str(row, 'question_kind')),
+    answer,
+    whyItMatters: str(row, 'why_it_matters') || str(row, 'whyItMatters'),
+    category: str(row, 'category'),
+    sourceRef: str(row, 'source_ref'),
+    createdAt,
+    ageDays,
+    rotting: ageDays !== null && ageDays > QUESTION_ROT_DAYS,
+    priority: num(row, 'priority'),
+  };
+}
+
+function roadmapItemOf(row: Record<string, unknown>): RoadmapItemRow | null {
+  const slug = str(row, 'roadmap_item_id') || str(row, 'slug');
+  if (!slug) return null;
+  return {
+    slug,
+    name: str(row, 'name'),
+    status: str(row, 'status') || 'proposed',
+  };
+}
+
+function includesAny(haystack: string, cues: string[]): string | null {
+  return cues.find((cue) => haystack.includes(cue)) ?? null;
+}
+
+function momTestAnswerability(question: string): {
+  score: number;
+  phrasing: 'past-behavior' | 'specific' | 'neutral' | 'hypothetical' | 'compliment';
+  rewriteHint: string | null;
+} {
+  const q = question.toLowerCase().trim();
+  const compliment = includesAny(q, COMPLIMENT_CUES);
+  if (compliment) {
+    return {
+      score: 0.2,
+      phrasing: 'compliment',
+      rewriteHint: `Compliment-seeking ("${compliment}") - ask what actually happened instead (for example, "which ... did you use last time", "what broke when ..."). The Mom Test: ask about past behavior, never for approval.`,
+    };
+  }
+  const hypothetical = includesAny(q, HYPOTHETICAL_CUES);
+  if (hypothetical) {
+    return {
+      score: 0.35,
+      phrasing: 'hypothetical',
+      rewriteHint: `Hypothetical ("${hypothetical}") - the operator can only guess. Rephrase around a concrete past event ("when did X last happen", "which Y did you pick and why").`,
+    };
+  }
+  const past = includesAny(q, PAST_BEHAVIOR_CUES);
+  if (past) {
+    return { score: 1.0, phrasing: q.startsWith('which') || past.trim() === 'which' ? 'specific' : 'past-behavior', rewriteHint: null };
+  }
+  return { score: 0.7, phrasing: 'neutral', rewriteHint: null };
+}
+
+function computeBlocking(q: OpenQuestionView, items: RoadmapItemRow[]): { blocking: number; refs: string[] } {
+  const hay = `${q.question} ${q.answer}`.toLowerCase();
+  const inProgress: string[] = [];
+  const next: string[] = [];
+  for (const item of items) {
+    const slug = item.slug.toLowerCase();
+    const name = item.name.toLowerCase();
+    const mentioned = (slug.length >= 4 && hay.includes(slug)) || (name.length >= 5 && hay.includes(name));
+    if (!mentioned) continue;
+    if (item.status === 'in_progress') inProgress.push(item.slug);
+    else if (item.status === 'accepted') next.push(item.slug);
+  }
+  if (inProgress.length > 0) return { blocking: BLOCKING_IN_PROGRESS, refs: [...inProgress].sort() };
+  if (next.length > 0) return { blocking: BLOCKING_NEXT, refs: [...next].sort() };
+  return { blocking: BLOCKING_BASELINE, refs: [] };
+}
+
+function computeFreshness(ageDays: number | null): number {
+  if (ageDays === null) return 0.3;
+  return 0.3 + 0.7 * Math.min(1, ageDays / QUESTION_ROT_DAYS);
+}
+
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function rankOpenQuestions(questions: OpenQuestionView[], items: RoadmapItemRow[]): Array<Record<string, unknown>> {
+  return questions
+    .map((q) => {
+      const { blocking, refs } = computeBlocking(q, items);
+      const gap = 0.5;
+      const freshness = computeFreshness(q.ageDays);
+      const answerability = momTestAnswerability(q.question);
+      const components = {
+        blocking: round3(blocking),
+        gap: round3(gap),
+        freshness: round3(freshness),
+        answerability: round3(answerability.score),
+      };
+      return {
+        id: q.id,
+        question: q.question,
+        questionKind: q.questionKind,
+        ageDays: q.ageDays,
+        value: round3(blocking * gap * freshness * answerability.score),
+        components,
+        answerability,
+        blockingRefs: refs,
+        gapSubjects: [],
+        whyItMatters: q.whyItMatters,
+        category: q.category,
+        sourceRef: q.sourceRef,
+        createdAt: q.createdAt,
+        rotting: q.rotting,
+        priority: q.priority,
+      };
+    })
+    .sort((a, b) => {
+      const av = typeof a['value'] === 'number' ? a['value'] : 0;
+      const bv = typeof b['value'] === 'number' ? b['value'] : 0;
+      const aa = typeof a['ageDays'] === 'number' ? a['ageDays'] : -1;
+      const ba = typeof b['ageDays'] === 'number' ? b['ageDays'] : -1;
+      return bv - av || ba - aa || String(a['id']).localeCompare(String(b['id']));
+    });
 }
 
 const SPOKEN_DIGITS: Record<string, string> = {
@@ -384,6 +597,34 @@ export class KfdbKnowledgeClient {
         { label: 'WikiPage', slug: pageSlug },
       ],
       fallback: { source: 'kfdb_trace', reason: 'home trace route unavailable' },
+    };
+  }
+
+  async nextQuestions(input: { topic?: string; limit: number }): Promise<unknown> {
+    const now = new Date();
+    const [questionRows, itemRows] = await Promise.all([
+      this.queryKql('MATCH (n:OpenQuestion) RETURN n.* LIMIT 2000'),
+      this.queryKql('MATCH (n:RoadmapItem) RETURN n.* LIMIT 1000').catch(() => []),
+    ]);
+    const topic = input.topic?.trim().toLowerCase();
+    const questions = questionRows
+      .map((row) => openQuestionOf(row, now))
+      .filter((q): q is OpenQuestionView => q !== null)
+      .filter((q) => !topic || JSON.stringify(q).toLowerCase().includes(topic));
+    const items = itemRows
+      .map(roadmapItemOf)
+      .filter((row): row is RoadmapItemRow => row !== null);
+    const ranked = rankOpenQuestions(questions, items);
+
+    return {
+      ranked: ranked.slice(0, input.limit),
+      total_ranked: ranked.length,
+      fallback: {
+        source: 'kfdb_open_questions',
+        reason: 'home next_questions unavailable or empty',
+        total_open: questions.length,
+        ranking: 'value = blocking x gap x freshness x answerability; gap defaults to baseline in MCP fallback',
+      },
     };
   }
 

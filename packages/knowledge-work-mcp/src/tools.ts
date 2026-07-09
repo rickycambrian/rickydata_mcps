@@ -24,6 +24,12 @@ function fallbackReason(err: unknown): Record<string, unknown> {
   };
 }
 
+function rankedCount(result: unknown): number {
+  if (!result || typeof result !== 'object') return 0;
+  const ranked = (result as Record<string, unknown>)['ranked'];
+  return Array.isArray(ranked) ? ranked.length : 0;
+}
+
 const labelsSchema = z
   .array(z.string())
   .optional()
@@ -291,8 +297,28 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     },
     async ({ topic, limit }) => {
       try {
-        return ok(await home.nextQuestions({ topic, limit }));
+        const homeQuestions = await home.nextQuestions({ topic, limit });
+        if (rankedCount(homeQuestions) > 0 || !kfdb) return ok(homeQuestions);
+        try {
+          return ok({
+            ...(await kfdb.nextQuestions({ topic, limit }) as Record<string, unknown>),
+            home_next_questions_empty: true,
+            home_total_ranked: (homeQuestions as Record<string, unknown>)['total_ranked'] ?? 0,
+          });
+        } catch (fallbackErr) {
+          return ok({
+            ...(homeQuestions as Record<string, unknown>),
+            kfdb_fallback_error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+          });
+        }
       } catch (err) {
+        if (kfdb) {
+          try {
+            return ok({ ...(await kfdb.nextQuestions({ topic, limit }) as Record<string, unknown>), ...fallbackReason(err) });
+          } catch {
+            /* Preserve the original home failure; the fallback is best-effort for read availability. */
+          }
+        }
         return fail(err);
       }
     },
