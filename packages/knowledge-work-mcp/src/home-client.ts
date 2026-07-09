@@ -16,6 +16,18 @@ export interface HomeClientDeps {
   tokenTtlSeconds?: number;
 }
 
+/**
+ * Undici surfaces its default 300s headers timeout as `TypeError: fetch failed`
+ * with a UND_ERR_* cause. Long home endpoints (lint refresh, batch-approve)
+ * legitimately outlive it while the server keeps working — callers convert
+ * this into a "started, poll for completion" result instead of an error.
+ */
+function isClientTimeout(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const cause = (err as { cause?: { code?: string } }).cause;
+  return typeof cause?.code === 'string' && cause.code.startsWith('UND_ERR');
+}
+
 type SourceRef = { label: string; nodeId?: string; scope: 'private' | 'global' };
 type QueueItem = {
   id: string;
@@ -174,6 +186,121 @@ export class HomeKnowledgeClient {
       ...(note?.trim() ? { answer: note.trim() } : {}),
       confidence: 1,
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Operator lane — depth census, bulk triage, compiler batch-approve, and
+  // Knowledge CI status. These are the calls operator sessions kept
+  // re-implementing as throwaway scripts (2026-07-09 auto-apply rollout).
+  // -------------------------------------------------------------------------
+
+  /**
+   * Census the FULL merged queue (not a display page): per-kind counts plus a
+   * small filtered sample. `limit` bounds the underlying fetch — keep it above
+   * the real queue depth or the census silently undercounts.
+   */
+  async queueCensus(input: { limit?: number; kind?: string; top?: number } = {}): Promise<unknown> {
+    const limit = Math.max(1, Math.min(5000, input.limit ?? 2000));
+    const body = await this.requestJson<{ items?: QueueItem[] }>('GET', `/api/hitl/queue?limit=${limit}`);
+    const items = Array.isArray(body.items) ? body.items : [];
+    const counts: Record<string, number> = {};
+    for (const item of items) counts[item.kind] = (counts[item.kind] ?? 0) + 1;
+    const kind = input.kind?.trim();
+    const filtered = kind ? items.filter((item) => item.kind === kind) : items;
+    const top = Math.max(1, Math.min(50, input.top ?? 10));
+    return {
+      total: items.length,
+      fetch_limit: limit,
+      truncated: items.length >= limit,
+      counts,
+      sample_kind: kind || 'all',
+      sample: filtered.slice(0, top).map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        title: item.title,
+        reason: item.reason ?? '',
+        sourceRef: item.sourceRef,
+      })),
+    };
+  }
+
+  /**
+   * Bulk park/reject up to 100 queue items in one verified write — the same
+   * route the cockpit's bulk triage uses. Approvals are intentionally NOT
+   * supported in bulk (wiki diffs must resolve individually).
+   */
+  async bulkDecide(ids: string[], action: 'park' | 'reject'): Promise<unknown> {
+    if (ids.length === 0) throw new Error('ids must be non-empty');
+    if (ids.length > 100) throw new Error('at most 100 ids per call — chunk and repeat');
+    return this.requestJson('POST', '/api/hitl/decisions/bulk', { ids, action });
+  }
+
+  /**
+   * Apply every pending LOW-RISK wiki diff (contradictions are never batch-
+   * approved). The server loop can outlive the client's fetch timeout; a
+   * timeout therefore means "still running", not "failed" — poll queueCensus
+   * for wiki_update to hit zero instead of re-firing.
+   */
+  async batchApproveWikiDiffs(): Promise<unknown> {
+    try {
+      return await this.requestJson('POST', '/api/wiki/compiler/batch-approve');
+    } catch (err) {
+      if (isClientTimeout(err)) {
+        return {
+          started: true,
+          client_timeout: true,
+          note: 'The server keeps applying diffs after a client timeout. Poll queue_census (kind wiki_update) until it reaches zero; do NOT re-fire immediately.',
+        };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Knowledge CI status: knownGood + a findings census (full finding bodies are
+   * large; high-severity details are included, med/low are counted). With
+   * `refresh` the 16-check run recomputes and can take minutes — a client
+   * timeout means the run continues server-side; re-read without refresh.
+   */
+  async lintStatus(refresh: boolean): Promise<unknown> {
+    let body: Record<string, unknown>;
+    try {
+      body = await this.requestJson<Record<string, unknown>>('GET', `/api/memory/lint${refresh ? '?refresh=1' : ''}`);
+    } catch (err) {
+      if (refresh && isClientTimeout(err)) {
+        return {
+          refresh_started: true,
+          client_timeout: true,
+          note: 'The lint run continues server-side. Re-call with refresh=false in a few minutes to read the completed run.',
+        };
+      }
+      throw err;
+    }
+    const run = (body['run'] && typeof body['run'] === 'object' ? (body['run'] as Record<string, unknown>) : body);
+    const findings = (Array.isArray(body['findings'])
+      ? body['findings']
+      : Array.isArray(run['findings'])
+        ? run['findings']
+        : []) as Array<{ check?: string; severity?: string; subjectRef?: string; detail?: string }>;
+    const byCheck: Record<string, number> = {};
+    for (const finding of findings) {
+      const check = String(finding.check ?? 'unknown');
+      byCheck[check] = (byCheck[check] ?? 0) + 1;
+    }
+    return {
+      knownGood: run['knownGood'] ?? body['knownGood'] ?? null,
+      runId: run['id'] ?? run['runId'] ?? null,
+      startedAt: run['startedAt'] ?? null,
+      findings_total: findings.length,
+      findings_by_check: byCheck,
+      high_findings: findings
+        .filter((finding) => finding.severity === 'high')
+        .map((finding) => ({
+          check: finding.check,
+          subjectRef: finding.subjectRef,
+          detail: (finding.detail ?? '').slice(0, 240),
+        })),
+    };
   }
 
   async captureDecision(input: { decision: string; context?: string; sessionId?: string }): Promise<unknown> {

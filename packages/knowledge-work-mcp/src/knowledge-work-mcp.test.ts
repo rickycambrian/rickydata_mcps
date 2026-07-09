@@ -477,3 +477,81 @@ describe('compiler-safe capture atoms', () => {
     });
   });
 });
+
+describe('operator lane', () => {
+  function authedHome(fetchImpl: typeof fetch): HomeKnowledgeClient {
+    return new HomeKnowledgeClient({
+      baseUrl: 'https://home.test',
+      signer: { address: '0x1111111111111111111111111111111111111111', signMessage: async () => '0xsig' },
+      mintToken: async () => 'scwt_test',
+      s2d: {
+        ensure: async () => ({ sessionId: 's2d-session', keyHex: 'a'.repeat(64), walletAddress: '0x1111111111111111111111111111111111111111' }),
+      },
+      fetchImpl,
+    });
+  }
+
+  function timeoutError(): TypeError {
+    const err = new TypeError('fetch failed');
+    (err as { cause?: { code: string } }).cause = { code: 'UND_ERR_HEADERS_TIMEOUT' };
+    return err;
+  }
+
+  it('queue_census counts the whole fetch, filters the sample, and flags truncation', async () => {
+    const items = [
+      { id: 'a', kind: 'wiki_update', title: 'A', sourceRef: { label: 'X', scope: 'private' } },
+      { id: 'b', kind: 'open_question', title: 'B', sourceRef: { label: 'X', scope: 'private' } },
+      { id: 'c', kind: 'open_question', title: 'C', sourceRef: { label: 'X', scope: 'private' } },
+    ];
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ items }));
+    const census = (await authedHome(fetchImpl).queueCensus({ limit: 3, kind: 'open_question', top: 1 })) as Record<string, unknown>;
+
+    expect(String(fetchImpl.mock.calls[0]![0])).toContain('/api/hitl/queue?limit=3');
+    expect(census['total']).toBe(3);
+    expect(census['truncated']).toBe(true); // items.length === limit → the census may undercount
+    expect(census['counts']).toEqual({ wiki_update: 1, open_question: 2 });
+    expect((census['sample'] as unknown[]).length).toBe(1);
+    expect((census['sample'] as Array<{ kind: string }>)[0]!.kind).toBe('open_question');
+  });
+
+  it('bulk_decide enforces the 100-id chunk cap before any network egress', async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const home = authedHome(fetchImpl);
+    await expect(home.bulkDecide(Array.from({ length: 101 }, (_, i) => `id-${i}`), 'reject')).rejects.toThrow(/100 ids/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('batch-approve converts a client timeout into started:true (server keeps applying)', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(timeoutError());
+    const result = (await authedHome(fetchImpl).batchApproveWikiDiffs()) as Record<string, unknown>;
+    expect(result['started']).toBe(true);
+    expect(result['client_timeout']).toBe(true);
+  });
+
+  it('lint refresh converts a client timeout into refresh_started:true, but a plain read rethrows', async () => {
+    const timeoutFetch = vi.fn<typeof fetch>().mockRejectedValue(timeoutError());
+    const refreshed = (await authedHome(timeoutFetch).lintStatus(true)) as Record<string, unknown>;
+    expect(refreshed['refresh_started']).toBe(true);
+
+    await expect(authedHome(timeoutFetch).lintStatus(false)).rejects.toThrow('fetch failed');
+  });
+
+  it('lint status summarizes findings and surfaces only high-severity details', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        run: { id: 'run-1', knownGood: true, startedAt: '2026-07-09T00:00:00Z' },
+        findings: [
+          { check: 'stale_claims', severity: 'med', subjectRef: 'wiki-page:x', detail: 'old' },
+          { check: 'shipped_without_evidence', severity: 'high', subjectRef: 'roadmap-item:y', detail: 'no commit satisfies' },
+        ],
+      }),
+    );
+    const status = (await authedHome(fetchImpl).lintStatus(false)) as Record<string, unknown>;
+    expect(status['knownGood']).toBe(true);
+    expect(status['findings_total']).toBe(2);
+    expect(status['findings_by_check']).toEqual({ stale_claims: 1, shipped_without_evidence: 1 });
+    expect(status['high_findings']).toEqual([
+      { check: 'shipped_without_evidence', subjectRef: 'roadmap-item:y', detail: 'no commit satisfies' },
+    ]);
+  });
+});

@@ -414,6 +414,72 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     },
   );
 
+  // ---------------------------------------------------------------------------
+  // Operator lane — the queue-drain / Knowledge-CI surface operator sessions
+  // previously re-implemented as throwaway scripts (2026-07-09 rollout).
+  // ---------------------------------------------------------------------------
+
+  server.tool(
+    'queue_census',
+    'Full-depth HITL queue census: per-kind counts over the whole ranked queue (not a display page) plus a small sample, optionally filtered to one kind. Use before/after bulk operations to verify drains actually landed.',
+    {
+      limit: z.number().int().min(1).max(5000).optional().default(2000).describe('Underlying fetch depth — keep above the real queue size or the census undercounts (truncated=true flags this).'),
+      kind: z.string().optional().describe("Optional kind filter for the sample, e.g. 'wiki_update', 'open_question', 'knowledge_lint'."),
+      top: z.number().int().min(1).max(50).optional().default(10).describe('How many sample items to return.'),
+    },
+    async ({ limit, kind, top }) => {
+      try {
+        return ok(await home.queueCensus({ limit, kind, top }));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    'bulk_decide',
+    'Bulk park/reject up to 100 HITL queue items in one verified write (the cockpit bulk-triage route). Approve is intentionally unsupported in bulk — wiki diffs must resolve individually. Chunk and repeat for larger drains, re-running queue_census between chunks.',
+    {
+      item_ids: z.array(z.string()).min(1).max(100).describe('Live HITL item ids.'),
+      action: z.enum(['park', 'reject']).describe('Bulk verdict.'),
+    },
+    async ({ item_ids, action }) => {
+      try {
+        return ok(await home.bulkDecide(item_ids, action));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    'batch_approve_wiki_diffs',
+    'Apply every pending LOW-RISK wiki diff through the same recordDecision+apply path the queue uses (contradictions are never batch-approved). Long-running: on client timeout the server KEEPS applying — poll queue_census (kind wiki_update) to zero instead of re-firing.',
+    {},
+    async () => {
+      try {
+        return ok(await home.batchApproveWikiDiffs());
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    'knowledge_lint',
+    'Knowledge CI status: knownGood verdict + findings census (high-severity details included). knownGood=true is the gate the auto-apply lane and other consumers key on. With refresh=true the 16-check run recomputes (can take minutes; a client timeout means it continues server-side — re-read with refresh=false).',
+    {
+      refresh: z.boolean().optional().default(false).describe('Recompute the lint run instead of reading the latest stored one.'),
+    },
+    async ({ refresh }) => {
+      try {
+        return ok(await home.lintStatus(refresh));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
   server.tool(
     'resolve_item',
     'Resolve a pending HITL queue item by id after the agent has read it aloud and heard an explicit verdict.',
