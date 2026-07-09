@@ -329,6 +329,18 @@ export class KfdbKnowledgeClient {
     const claimText = String((exactClaim as Record<string, unknown>)['text'] ?? claim.text);
     const verified = Array.isArray(page.verifiedClaimIds) ? page.verifiedClaimIds.includes(claim.id) : Boolean((exactClaim as Record<string, unknown>)['verified']);
     const pageSlug = claim.pageSlug;
+    const pageRecord = page.page ?? {};
+    const compactPage = {
+      slug: typeof pageRecord['slug'] === 'string' ? pageRecord['slug'] : pageSlug,
+      title: typeof pageRecord['title'] === 'string' ? pageRecord['title'] : undefined,
+      kind: typeof pageRecord['kind'] === 'string' ? pageRecord['kind'] : undefined,
+      summary: typeof pageRecord['summary'] === 'string' ? pageRecord['summary'] : undefined,
+      status: typeof pageRecord['status'] === 'string' ? pageRecord['status'] : undefined,
+      sourceCount: typeof pageRecord['sourceCount'] === 'number' ? pageRecord['sourceCount'] : undefined,
+      lastCompiledAt: typeof pageRecord['lastCompiledAt'] === 'string' ? pageRecord['lastCompiledAt'] : undefined,
+      compilerVersion: typeof pageRecord['compilerVersion'] === 'string' ? pageRecord['compilerVersion'] : undefined,
+      nodeId: typeof pageRecord['nodeId'] === 'string' ? pageRecord['nodeId'] : undefined,
+    };
 
     return {
       answer: `${claimText} (page ${pageSlug}; claim ${claim.id}; ${verified ? 'verified' : 'recorded but not yet verified'}).`,
@@ -339,7 +351,7 @@ export class KfdbKnowledgeClient {
       verified,
       kind: 'wiki-claim',
       id: claim.id,
-      page: page.page,
+      page: compactPage,
       claim: exactClaim,
       trace: [
         { label: 'WikiClaim', id: claim.id, sourceRef: claim.sourceRef },

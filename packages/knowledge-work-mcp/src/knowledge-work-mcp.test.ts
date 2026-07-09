@@ -290,9 +290,14 @@ describe('KFDB read/write auth split', () => {
       sourceRef: 'evidence:akc-p10-code-integration:build:50cb7f',
       verified: true,
       claim: { id: 'claim:target', text: 'Phase 10 passed build gate in 1.93s.', verified: true },
-      page: { slug: 'agentic-knowledge-compiler' },
+      page: { slug: 'agentic-knowledge-compiler', title: 'The Agentic Knowledge Compiler', summary: 'AKC facts.' },
       fallback: { source: 'kfdb_trace' },
     });
+    const trace = await kfdb.trace('wiki-claim', 'evidence:akc-p10-code-integration:build:50cb7f') as {
+      page?: Record<string, unknown>;
+    };
+    expect(trace.page).not.toHaveProperty('bodyMd');
+    expect(trace.page).not.toHaveProperty('body_md');
   });
 });
 
