@@ -126,6 +126,33 @@ function wikiClaimOf(row: Record<string, unknown>): WikiClaimRow | null {
   };
 }
 
+const SPOKEN_DIGITS: Record<string, string> = {
+  '0': 'zero',
+  '1': 'one',
+  '2': 'two',
+  '3': 'three',
+  '4': 'four',
+  '5': 'five',
+  '6': 'six',
+  '7': 'seven',
+  '8': 'eight',
+  '9': 'nine',
+};
+
+function voiceSafeDurations(text: string): string {
+  return text.replace(/\b(\d+)\.(\d+)s\b/g, (_match, whole: string, fraction: string) => {
+    const spokenWhole = whole
+      .split('')
+      .map((digit) => SPOKEN_DIGITS[digit] ?? digit)
+      .join(' ');
+    const spokenFraction = fraction
+      .split('')
+      .map((digit) => SPOKEN_DIGITS[digit] ?? digit)
+      .join(' ');
+    return `${spokenWhole} point ${spokenFraction} seconds`;
+  });
+}
+
 export class KfdbKnowledgeClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
@@ -334,17 +361,16 @@ export class KfdbKnowledgeClient {
       slug: typeof pageRecord['slug'] === 'string' ? pageRecord['slug'] : pageSlug,
       title: typeof pageRecord['title'] === 'string' ? pageRecord['title'] : undefined,
       kind: typeof pageRecord['kind'] === 'string' ? pageRecord['kind'] : undefined,
-      summary: typeof pageRecord['summary'] === 'string' ? pageRecord['summary'] : undefined,
       status: typeof pageRecord['status'] === 'string' ? pageRecord['status'] : undefined,
-      sourceCount: typeof pageRecord['sourceCount'] === 'number' ? pageRecord['sourceCount'] : undefined,
-      lastCompiledAt: typeof pageRecord['lastCompiledAt'] === 'string' ? pageRecord['lastCompiledAt'] : undefined,
-      compilerVersion: typeof pageRecord['compilerVersion'] === 'string' ? pageRecord['compilerVersion'] : undefined,
-      nodeId: typeof pageRecord['nodeId'] === 'string' ? pageRecord['nodeId'] : undefined,
     };
+    const rawAnswer = `${claimText} (page ${pageSlug}; claim ${claim.id}; ${verified ? 'verified' : 'recorded but not yet verified'}).`;
+    const answer = voiceSafeDurations(rawAnswer);
 
     return {
-      answer: `${claimText} (page ${pageSlug}; claim ${claim.id}; ${verified ? 'verified' : 'recorded but not yet verified'}).`,
+      answer,
+      rawAnswer,
       claimText,
+      spokenClaimText: voiceSafeDurations(claimText),
       claimId: claim.id,
       pageSlug,
       sourceRef: claim.sourceRef,
@@ -352,16 +378,12 @@ export class KfdbKnowledgeClient {
       kind: 'wiki-claim',
       id: claim.id,
       page: compactPage,
-      claim: exactClaim,
+      citation: { pageSlug, claimId: claim.id, verified },
       trace: [
         { label: 'WikiClaim', id: claim.id, sourceRef: claim.sourceRef },
         { label: 'WikiPage', slug: pageSlug },
       ],
-      fallback: {
-        ...(page.fallback ?? {}),
-        source: 'kfdb_trace',
-        reason: 'home trace route unavailable',
-      },
+      fallback: { source: 'kfdb_trace', reason: 'home trace route unavailable' },
     };
   }
 

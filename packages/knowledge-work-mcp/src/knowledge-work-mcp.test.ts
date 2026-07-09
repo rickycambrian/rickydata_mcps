@@ -281,16 +281,18 @@ describe('KFDB read/write auth split', () => {
     });
 
     await expect(kfdb.trace('wiki-claim', 'evidence:akc-p10-code-integration:build:50cb7f')).resolves.toMatchObject({
-      answer: 'Phase 10 passed build gate in 1.93s. (page agentic-knowledge-compiler; claim claim:target; verified).',
+      answer: 'Phase 10 passed build gate in one point nine three seconds. (page agentic-knowledge-compiler; claim claim:target; verified).',
+      rawAnswer: 'Phase 10 passed build gate in 1.93s. (page agentic-knowledge-compiler; claim claim:target; verified).',
       claimText: 'Phase 10 passed build gate in 1.93s.',
+      spokenClaimText: 'Phase 10 passed build gate in one point nine three seconds.',
       claimId: 'claim:target',
       pageSlug: 'agentic-knowledge-compiler',
       kind: 'wiki-claim',
       id: 'claim:target',
       sourceRef: 'evidence:akc-p10-code-integration:build:50cb7f',
       verified: true,
-      claim: { id: 'claim:target', text: 'Phase 10 passed build gate in 1.93s.', verified: true },
-      page: { slug: 'agentic-knowledge-compiler', title: 'The Agentic Knowledge Compiler', summary: 'AKC facts.' },
+      citation: { pageSlug: 'agentic-knowledge-compiler', claimId: 'claim:target', verified: true },
+      page: { slug: 'agentic-knowledge-compiler', title: 'The Agentic Knowledge Compiler' },
       fallback: { source: 'kfdb_trace' },
     });
     const trace = await kfdb.trace('wiki-claim', 'evidence:akc-p10-code-integration:build:50cb7f') as {
