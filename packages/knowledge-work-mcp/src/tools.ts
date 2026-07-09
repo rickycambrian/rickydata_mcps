@@ -383,22 +383,31 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       limit: z.number().int().min(1).max(20).optional().default(5),
     },
     async ({ limit }) => {
+      const kfdbQuestions = kfdb
+        ? kfdb
+          .nextQuestions({ limit })
+          .then((value) => ({ ok: true as const, value }))
+          .catch((error: unknown) => ({ ok: false as const, error }))
+        : null;
       try {
         const pending = await home.reviewPending(limit);
-        if (queueItemCount(pending) > 0 || !kfdb) return ok(pending);
-        const fallback = reviewPendingFallbackFromQuestions(await kfdb.nextQuestions({ limit }), limit);
+        if (queueItemCount(pending) > 0 || !kfdbQuestions) return ok(pending);
+        const fallback = await kfdbQuestions;
+        if (fallback.ok) {
+          return ok({
+            ...reviewPendingFallbackFromQuestions(fallback.value, limit),
+            home_review_pending_empty: true,
+            home_counts: (pending as Record<string, unknown>)['counts'] ?? {},
+          });
+        }
         return ok({
-          ...fallback,
-          home_review_pending_empty: true,
-          home_counts: (pending as Record<string, unknown>)['counts'] ?? {},
+          ...(pending as Record<string, unknown>),
+          kfdb_fallback_error: fallback.error instanceof Error ? fallback.error.message : String(fallback.error),
         });
       } catch (err) {
-        if (kfdb) {
-          try {
-            return ok({ ...reviewPendingFallbackFromQuestions(await kfdb.nextQuestions({ limit }), limit), ...fallbackReason(err) });
-          } catch {
-            /* Preserve the original home failure; the fallback is best-effort for read availability. */
-          }
+        if (kfdbQuestions) {
+          const fallback = await kfdbQuestions;
+          if (fallback.ok) return ok({ ...reviewPendingFallbackFromQuestions(fallback.value, limit), ...fallbackReason(err) });
         }
         return fail(err);
       }
