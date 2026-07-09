@@ -302,45 +302,40 @@ describe('KFDB read/write auth split', () => {
     expect(trace.page).not.toHaveProperty('body_md');
   });
 
-  it('ranks direct KFDB OpenQuestion rows for next_questions fallback', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
-      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as { query?: string };
-      if (body.query?.includes('OpenQuestion')) {
+  it('ranks the fast KFDB knowledge-bundle OpenQuestion projection for next_questions', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as Record<string, unknown>;
+      if (String(url).endsWith('/api/v1/agent/knowledge')) {
+        expect(body).toMatchObject({
+          page_limit: 1,
+          claim_limit: 1,
+          include_questions: true,
+        });
         return jsonResponse({
-          data: [
+          open_questions: [
             {
-              _id: { String: 'oq-live' },
-              question: { String: 'Which voice-relay commit last streamed from the Core2 device?' },
-              question_kind: { String: 'question' },
-              why_it_matters: { String: 'Blocks the device proof.' },
-              category: { String: 'voice' },
-              source_ref: { String: 'voice-proof:t4' },
-              created_at: { String: '2026-01-01T00:00:00.000Z' },
-              priority: { Integer: 7 },
-              status: { String: 'open' },
+              id: 'oq-live',
+              question: 'Which voice-relay commit last streamed from the Core2 device?',
+              question_kind: 'question',
+              why_it_matters: 'Blocks the device proof.',
+              category: 'voice',
+              source_ref: 'voice-proof:t4',
+              created_at: '2026-01-01T00:00:00.000Z',
+              priority: 7,
+              status: 'open',
             },
             {
-              _id: { String: 'oq-answered' },
-              question: { String: 'Which stale question is already answered?' },
-              answer: { String: 'Already answered.' },
-              status: { String: 'answered' },
+              id: 'oq-answered',
+              question: 'Which stale question is already answered?',
+              answer: 'Already answered.',
+              status: 'answered',
             },
           ],
+          diagnostics: { scanned_questions: 2, pruned_questions: 0 },
+          reproducibility_hash: 'questions-hash',
         });
       }
-      if (body.query?.includes('RoadmapItem')) {
-        return jsonResponse({
-          data: [
-            {
-              _id: { String: 'roadmap:voice-relay' },
-              roadmap_item_id: { String: 'voice-relay' },
-              name: { String: 'Core2 voice relay' },
-              status: { String: 'in_progress' },
-            },
-          ],
-        });
-      }
-      return jsonResponse({ data: [] });
+      return jsonResponse({}, { status: 404 });
     });
     const kfdb = new KfdbKnowledgeClient({
       baseUrl: 'https://kfdb.test',
@@ -366,8 +361,9 @@ describe('KFDB read/write auth split', () => {
         },
       ],
       total_ranked: 1,
-      fallback: { source: 'kfdb_open_questions', total_open: 1 },
+      fallback: { source: 'kfdb_agent_knowledge', total_open: 1 },
     });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('maps KFDB OpenQuestions into a spoken review_pending fallback digest', () => {

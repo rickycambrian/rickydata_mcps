@@ -45,6 +45,7 @@ type WikiClaimRow = {
 type KnowledgeBundle = {
   pages?: Array<Record<string, unknown>>;
   claims?: Array<Record<string, unknown>>;
+  open_questions?: Array<Record<string, unknown>>;
   diagnostics?: Record<string, unknown>;
   reproducibility_hash?: string;
 };
@@ -205,7 +206,7 @@ function normalizeQuestionKind(raw: string): QuestionKind {
 function openQuestionOf(row: Record<string, unknown>, now: Date): OpenQuestionView | null {
   const unwrapped = unwrapRow(row);
   if (!Object.keys(unwrapped).some((key) => !key.startsWith('_'))) return null;
-  const id = str(row, '_id');
+  const id = str(row, '_id') || str(row, 'id');
   if (!id) return null;
   const status = str(row, 'status');
   const answer = str(row, 'answer');
@@ -592,7 +593,15 @@ export class KfdbKnowledgeClient {
 
   async nextQuestions(input: { topic?: string; limit: number }): Promise<unknown> {
     const now = new Date();
-    const questionRows = await this.queryKql('MATCH (n:OpenQuestion) RETURN n.* LIMIT 2000');
+    const bundle = await this.knowledgeBundle({
+      query: input.topic?.trim() || undefined,
+      token_budget: 12000,
+      page_limit: 1,
+      claim_limit: 1,
+      include_questions: true,
+      question_limit: 500,
+    }) as KnowledgeBundle;
+    const questionRows = Array.isArray(bundle.open_questions) ? bundle.open_questions : [];
     const topic = input.topic?.trim().toLowerCase();
     const questions = questionRows
       .map((row) => openQuestionOf(row, now))
@@ -605,10 +614,12 @@ export class KfdbKnowledgeClient {
       ranked: ranked.slice(0, input.limit),
       total_ranked: ranked.length,
       fallback: {
-        source: 'kfdb_open_questions',
-        reason: 'home next_questions unavailable or empty',
+        source: 'kfdb_agent_knowledge',
+        reason: 'home next_questions unavailable or empty; ranked the optimized KFDB knowledge-bundle question projection',
         total_open: questions.length,
         ranking: 'value = blocking x gap x freshness x answerability; blocking and gap default to baseline in MCP fallback',
+        diagnostics: bundle.diagnostics ?? {},
+        reproducibility_hash: bundle.reproducibility_hash,
       },
     };
   }
