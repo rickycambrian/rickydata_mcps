@@ -4,7 +4,7 @@ import { FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
-import { shouldPreferKfdbTrace, shouldUseKfdbTraceFallback } from './tools.js';
+import { reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
@@ -367,6 +367,40 @@ describe('KFDB read/write auth split', () => {
       ],
       total_ranked: 1,
       fallback: { source: 'kfdb_open_questions', total_open: 1 },
+    });
+  });
+
+  it('maps KFDB OpenQuestions into a spoken review_pending fallback digest', () => {
+    expect(
+      reviewPendingFallbackFromQuestions(
+        {
+          ranked: [
+            {
+              id: 'oq-live',
+              question: 'Which voice-relay commit last streamed from the Core2 device?',
+              whyItMatters: 'Blocks the device proof.',
+            },
+            {
+              id: 'oq-second',
+              question: 'Which pending item should stay second?',
+            },
+          ],
+          total_ranked: 12,
+        },
+        1,
+      ),
+    ).toMatchObject({
+      counts: { open_question: 1 },
+      items: [
+        {
+          id: 'oq-live',
+          kind: 'open_question',
+          title: 'Which voice-relay commit last streamed from the Core2 device?',
+          reason: 'Blocks the device proof.',
+          sourceRef: { label: 'OpenQuestion', nodeId: 'oq-live', scope: 'private' },
+        },
+      ],
+      fallback: { source: 'kfdb_open_questions', total_open: 12 },
     });
   });
 });

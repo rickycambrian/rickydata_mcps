@@ -30,6 +30,39 @@ function rankedCount(result: unknown): number {
   return Array.isArray(ranked) ? ranked.length : 0;
 }
 
+function queueItemCount(result: unknown): number {
+  if (!result || typeof result !== 'object') return 0;
+  const items = (result as Record<string, unknown>)['items'];
+  return Array.isArray(items) ? items.length : 0;
+}
+
+export function reviewPendingFallbackFromQuestions(result: unknown, limit: number): Record<string, unknown> {
+  const value = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+  const ranked = Array.isArray(value['ranked']) ? value['ranked'] as Array<Record<string, unknown>> : [];
+  const items = ranked.slice(0, limit).map((question) => {
+    const id = String(question['id'] ?? '').trim();
+    const title = String(question['question'] ?? '').trim() || `Open question ${id || 'unknown'}`;
+    const reason = String(question['whyItMatters'] ?? question['why_it_matters'] ?? '').trim() || 'Open question awaiting an operator answer.';
+    return {
+      id,
+      kind: 'open_question',
+      title,
+      reason,
+      sourceRef: { label: 'OpenQuestion', nodeId: id, scope: 'private' },
+    };
+  }).filter((item) => item.id);
+  return {
+    counts: items.length > 0 ? { open_question: items.length } : {},
+    items,
+    fallback: {
+      source: 'kfdb_open_questions',
+      reason: 'home review_pending unavailable or empty',
+      total_open: typeof value['total_ranked'] === 'number' ? value['total_ranked'] : ranked.length,
+      ranking: 'value = blocking x gap x freshness x answerability; blocking and gap default to baseline in MCP fallback',
+    },
+  };
+}
+
 const labelsSchema = z
   .array(z.string())
   .optional()
@@ -351,8 +384,22 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     },
     async ({ limit }) => {
       try {
-        return ok(await home.reviewPending(limit));
+        const pending = await home.reviewPending(limit);
+        if (queueItemCount(pending) > 0 || !kfdb) return ok(pending);
+        const fallback = reviewPendingFallbackFromQuestions(await kfdb.nextQuestions({ limit }), limit);
+        return ok({
+          ...fallback,
+          home_review_pending_empty: true,
+          home_counts: (pending as Record<string, unknown>)['counts'] ?? {},
+        });
       } catch (err) {
+        if (kfdb) {
+          try {
+            return ok({ ...reviewPendingFallbackFromQuestions(await kfdb.nextQuestions({ limit }), limit), ...fallbackReason(err) });
+          } catch {
+            /* Preserve the original home failure; the fallback is best-effort for read availability. */
+          }
+        }
         return fail(err);
       }
     },
