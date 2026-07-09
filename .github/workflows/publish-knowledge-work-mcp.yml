@@ -85,7 +85,6 @@ jobs:
       - name: Publish to npm
         id: publish
         if: steps.check.outputs.exists == 'false'
-        continue-on-error: true
         # Publish from inside the package dir. `npm publish --workspace` can
         # 404 on first publish of a new scoped package.
         working-directory: packages/knowledge-work-mcp
@@ -94,16 +93,11 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
 
-      - name: Resolve registry mode
-        id: registry
+      - name: Verify published package
         run: |
-          if [ "${{ steps.check.outputs.exists }}" = "true" ] || [ "${{ steps.publish.outcome }}" = "success" ]; then
-            echo "type=npm" >> "$GITHUB_OUTPUT"
-            echo "::notice::Registering npm-backed knowledge-work-mcp"
-          else
-            echo "type=git" >> "$GITHUB_OUTPUT"
-            echo "::warning::npm publish did not create @rickydata/knowledge-work-mcp; registering source-backed git server"
-          fi
+          PUBLISHED=$(npm view "@rickydata/knowledge-work-mcp@${{ steps.ver.outputs.version }}" version)
+          test "$PUBLISHED" = "${{ steps.ver.outputs.version }}"
+          echo "::notice::Verified @rickydata/knowledge-work-mcp@$PUBLISHED on npm"
 
       - name: Build KFDB MCPServer payload
         id: payload
@@ -117,7 +111,7 @@ jobs:
             const fs=require('fs');
             const tools=JSON.parse(fs.readFileSync('/tmp/tools_available.json','utf8'));
             const v='${{ steps.ver.outputs.version }}';
-            const registryType='${{ steps.registry.outputs.type }}';
+            const registryType='npm';
             const pkg='@rickydata/knowledge-work-mcp';
             const sourceRepository='https://github.com/rickycambrian/rickydata_mcps';
             const packageSubdir='packages/knowledge-work-mcp';
@@ -128,12 +122,8 @@ jobs:
               {name:'HOME_API_URL',description:'Home API URL override; defaults to https://rickydata-home-2dbp4scmrq-uc.a.run.app.',required:false},
               {name:'KFDB_API_URL',description:'KFDB API URL override; defaults to https://db.rickydata.org.',required:false}
             ];
-            const installCommand=registryType === 'npm'
-              ? 'npx -y @rickydata/knowledge-work-mcp@'+v
-              : 'git clone '+sourceRepository+' && cd rickydata_mcps/'+packageSubdir+' && npm install && npm run build';
-            const runCommand=registryType === 'npm'
-              ? 'npx -y @rickydata/knowledge-work-mcp@'+v
-              : 'npm start';
+            const installCommand='npx -y @rickydata/knowledge-work-mcp@'+v;
+            const runCommand='npx -y @rickydata/knowledge-work-mcp@'+v;
             const payload={operations:[{operation:'create_node',id:'3883e5df-de92-5c4d-9c09-f4f79a62e22d',label:'MCPServer',mode:'merge',properties:{
               name:{String:'knowledge-work-mcp'},
               server_name:{String:'knowledge-work-mcp'},
@@ -226,5 +216,5 @@ jobs:
           echo "- **Tools**: ${{ steps.tools.outputs.count }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Already on npm**: ${{ steps.check.outputs.exists }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Publish**: ${{ steps.publish.outcome || 'skipped' }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Registry mode**: ${{ steps.registry.outputs.type || 'unknown' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Registry mode**: npm (required)" >> "$GITHUB_STEP_SUMMARY"
           echo "- **MCPServer id**: 3883e5df-de92-5c4d-9c09-f4f79a62e22d" >> "$GITHUB_STEP_SUMMARY"
