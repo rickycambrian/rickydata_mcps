@@ -326,17 +326,24 @@ export class KfdbKnowledgeClient {
       fallback?: Record<string, unknown>;
     };
     const exactClaim = page.claims?.find((row) => row['id'] === claim.id) ?? claim;
+    const claimText = String((exactClaim as Record<string, unknown>)['text'] ?? claim.text);
+    const verified = Array.isArray(page.verifiedClaimIds) ? page.verifiedClaimIds.includes(claim.id) : Boolean((exactClaim as Record<string, unknown>)['verified']);
+    const pageSlug = claim.pageSlug;
 
     return {
+      answer: `${claimText} (page ${pageSlug}; claim ${claim.id}; ${verified ? 'verified' : 'recorded but not yet verified'}).`,
+      claimText,
+      claimId: claim.id,
+      pageSlug,
+      sourceRef: claim.sourceRef,
+      verified,
       kind: 'wiki-claim',
       id: claim.id,
-      sourceRef: claim.sourceRef,
       page: page.page,
       claim: exactClaim,
-      verified: Array.isArray(page.verifiedClaimIds) ? page.verifiedClaimIds.includes(claim.id) : Boolean((exactClaim as Record<string, unknown>)['verified']),
       trace: [
         { label: 'WikiClaim', id: claim.id, sourceRef: claim.sourceRef },
-        { label: 'WikiPage', slug: claim.pageSlug },
+        { label: 'WikiPage', slug: pageSlug },
       ],
       fallback: {
         ...(page.fallback ?? {}),

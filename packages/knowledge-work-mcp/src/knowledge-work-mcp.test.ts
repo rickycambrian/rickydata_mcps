@@ -281,6 +281,10 @@ describe('KFDB read/write auth split', () => {
     });
 
     await expect(kfdb.trace('wiki-claim', 'evidence:akc-p10-code-integration:build:50cb7f')).resolves.toMatchObject({
+      answer: 'Phase 10 passed build gate in 1.93s. (page agentic-knowledge-compiler; claim claim:target; verified).',
+      claimText: 'Phase 10 passed build gate in 1.93s.',
+      claimId: 'claim:target',
+      pageSlug: 'agentic-knowledge-compiler',
       kind: 'wiki-claim',
       id: 'claim:target',
       sourceRef: 'evidence:akc-p10-code-integration:build:50cb7f',
