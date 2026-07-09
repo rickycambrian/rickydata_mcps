@@ -166,7 +166,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
   server.tool(
     'trace',
-    'Read provenance trace receipts for a wiki page, claim, assertion, context pack, or HomeDecision.',
+    'Read provenance trace receipts for a wiki page, claim, assertion, context pack, or HomeDecision. For exact source refs like evidence:* or roadmap:*, use kind wiki-claim and id equal to the source_ref.',
     {
       kind: z.string().describe('Trace kind, e.g. wiki-page, wiki-claim, assertion, context-pack, home-decision.'),
       id: z.string().describe('Trace subject id.'),
@@ -175,6 +175,13 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       try {
         return ok(await home.trace(kind, id));
       } catch (err) {
+        if (kfdb) {
+          try {
+            return ok({ ...(await kfdb.trace(kind, id) as Record<string, unknown>), ...fallbackReason(err) });
+          } catch {
+            /* Preserve the original home failure; the fallback is best-effort for read availability. */
+          }
+        }
         return fail(err);
       }
     },

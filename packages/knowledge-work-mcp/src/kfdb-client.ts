@@ -300,6 +300,52 @@ export class KfdbKnowledgeClient {
     };
   }
 
+  async trace(kind: string, id: string): Promise<unknown> {
+    const traceKind = kind.trim().toLowerCase();
+    const target = id.trim();
+    if (!target) throw new ApiError('kfdb', 400, 'trace id is required');
+
+    if (traceKind === 'wiki-page' || traceKind === 'wikipage' || traceKind === 'page') {
+      return {
+        kind: 'wiki-page',
+        id: target,
+        ...(await this.wikiPage(target) as Record<string, unknown>),
+      };
+    }
+
+    const claimRows = await this.queryKql('MATCH (n:WikiClaim) RETURN n.* LIMIT 5000');
+    const claim = claimRows
+      .map(wikiClaimOf)
+      .find((row): row is WikiClaimRow => row !== null && row.status !== 'retracted' && (row.id === target || row.sourceRef === target));
+    if (!claim) throw new ApiError('kfdb', 404, `wiki claim trace not found: ${target}`);
+
+    const page = await this.wikiPage(claim.pageSlug) as {
+      page?: Record<string, unknown>;
+      claims?: Array<Record<string, unknown>>;
+      verifiedClaimIds?: string[];
+      fallback?: Record<string, unknown>;
+    };
+    const exactClaim = page.claims?.find((row) => row['id'] === claim.id) ?? claim;
+
+    return {
+      kind: 'wiki-claim',
+      id: claim.id,
+      sourceRef: claim.sourceRef,
+      page: page.page,
+      claim: exactClaim,
+      verified: Array.isArray(page.verifiedClaimIds) ? page.verifiedClaimIds.includes(claim.id) : Boolean((exactClaim as Record<string, unknown>)['verified']),
+      trace: [
+        { label: 'WikiClaim', id: claim.id, sourceRef: claim.sourceRef },
+        { label: 'WikiPage', slug: claim.pageSlug },
+      ],
+      fallback: {
+        ...(page.fallback ?? {}),
+        source: 'kfdb_trace',
+        reason: 'home trace route unavailable',
+      },
+    };
+  }
+
   async semanticSearch(input: SemanticSearchInput): Promise<unknown> {
     const labels = input.labels.length > 0 ? input.labels : ['WikiPage', 'OpenQuestion', 'HomeDecision', 'RoadmapItem'];
     const headers = await this.headersWithOptionalS2D();

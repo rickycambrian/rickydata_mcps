@@ -213,6 +213,82 @@ describe('KFDB read/write auth split', () => {
       fallback: { source: 'kfdb_query', reproducibility_hash: 'hash' },
     });
   });
+
+  it('traces WikiClaim rows by source_ref and returns the exact verified claim', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as { query?: string; query_text?: string };
+      if (body.query?.includes('WikiPage')) {
+        return jsonResponse({
+          data: [
+            {
+              _id: { String: 'wiki-page:agentic-knowledge-compiler' },
+              slug: { String: 'agentic-knowledge-compiler' },
+              kind: { String: 'program' },
+              title: { String: 'The Agentic Knowledge Compiler' },
+              summary: { String: 'AKC facts.' },
+              body_md: { String: '# AKC' },
+              status: { String: 'active' },
+              source_count: { Integer: 3 },
+              last_compiled_at: { String: '2026-07-08T12:00:00.000Z' },
+              compiler_version: { String: 'test' },
+              rickydata_wiki_schema_version: { String: 'v1' },
+            },
+          ],
+        });
+      }
+      if (body.query?.includes('WikiClaim')) {
+        return jsonResponse({
+          data: [
+            {
+              _id: { String: 'claim:wrong' },
+              page_slug: { String: 'agentic-knowledge-compiler' },
+              text: { String: 'Nearby but wrong claim.' },
+              confidence_tier: { String: 'EXTRACTED' },
+              confidence_score: { Float: 1 },
+              status: { String: 'active' },
+              source_ref: { String: 'roadmap:other' },
+              updated_at: { String: '2026-07-08T12:00:00.000Z' },
+              rickydata_wiki_schema_version: { String: 'v1' },
+            },
+            {
+              _id: { String: 'claim:target' },
+              page_slug: { String: 'agentic-knowledge-compiler' },
+              text: { String: 'Phase 10 passed build gate in 1.93s.' },
+              confidence_tier: { String: 'EXTRACTED' },
+              confidence_score: { Float: 1 },
+              status: { String: 'active' },
+              source_ref: { String: 'evidence:akc-p10-code-integration:build:50cb7f' },
+              updated_at: { String: '2026-07-08T12:00:00.000Z' },
+              rickydata_wiki_schema_version: { String: 'v1' },
+            },
+          ],
+        });
+      }
+      return jsonResponse({
+        pages: [],
+        claims: [{ id: 'claim:target', page_slug: 'agentic-knowledge-compiler', verified: true }],
+        diagnostics: { s2d_active: true },
+        reproducibility_hash: 'hash',
+      });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.trace('wiki-claim', 'evidence:akc-p10-code-integration:build:50cb7f')).resolves.toMatchObject({
+      kind: 'wiki-claim',
+      id: 'claim:target',
+      sourceRef: 'evidence:akc-p10-code-integration:build:50cb7f',
+      verified: true,
+      claim: { id: 'claim:target', text: 'Phase 10 passed build gate in 1.93s.', verified: true },
+      page: { slug: 'agentic-knowledge-compiler' },
+      fallback: { source: 'kfdb_trace' },
+    });
+  });
 });
 
 describe('compiler-safe capture atoms', () => {
