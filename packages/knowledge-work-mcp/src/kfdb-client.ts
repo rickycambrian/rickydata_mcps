@@ -230,16 +230,6 @@ function openQuestionOf(row: Record<string, unknown>, now: Date): OpenQuestionVi
   };
 }
 
-function roadmapItemOf(row: Record<string, unknown>): RoadmapItemRow | null {
-  const slug = str(row, 'roadmap_item_id') || str(row, 'slug');
-  if (!slug) return null;
-  return {
-    slug,
-    name: str(row, 'name'),
-    status: str(row, 'status') || 'proposed',
-  };
-}
-
 function includesAny(haystack: string, cues: string[]): string | null {
   return cues.find((cue) => haystack.includes(cue)) ?? null;
 }
@@ -602,18 +592,13 @@ export class KfdbKnowledgeClient {
 
   async nextQuestions(input: { topic?: string; limit: number }): Promise<unknown> {
     const now = new Date();
-    const [questionRows, itemRows] = await Promise.all([
-      this.queryKql('MATCH (n:OpenQuestion) RETURN n.* LIMIT 2000'),
-      this.queryKql('MATCH (n:RoadmapItem) RETURN n.* LIMIT 1000').catch(() => []),
-    ]);
+    const questionRows = await this.queryKql('MATCH (n:OpenQuestion) RETURN n.* LIMIT 2000');
     const topic = input.topic?.trim().toLowerCase();
     const questions = questionRows
       .map((row) => openQuestionOf(row, now))
       .filter((q): q is OpenQuestionView => q !== null)
       .filter((q) => !topic || JSON.stringify(q).toLowerCase().includes(topic));
-    const items = itemRows
-      .map(roadmapItemOf)
-      .filter((row): row is RoadmapItemRow => row !== null);
+    const items: RoadmapItemRow[] = [];
     const ranked = rankOpenQuestions(questions, items);
 
     return {
@@ -623,7 +608,7 @@ export class KfdbKnowledgeClient {
         source: 'kfdb_open_questions',
         reason: 'home next_questions unavailable or empty',
         total_open: questions.length,
-        ranking: 'value = blocking x gap x freshness x answerability; gap defaults to baseline in MCP fallback',
+        ranking: 'value = blocking x gap x freshness x answerability; blocking and gap default to baseline in MCP fallback',
       },
     };
   }
