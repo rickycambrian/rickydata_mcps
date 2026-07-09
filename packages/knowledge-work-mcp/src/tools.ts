@@ -43,6 +43,12 @@ export function shouldUseKfdbTraceFallback(trace: unknown): boolean {
   });
 }
 
+export function shouldPreferKfdbTrace(kind: string, id: string): boolean {
+  const traceKind = kind.trim().toLowerCase();
+  const target = id.trim().toLowerCase();
+  return traceKind === 'wiki-claim' || traceKind === 'wikiclaim' || /^(evidence|roadmap):/.test(target);
+}
+
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { home, kfdb } = deps;
 
@@ -185,6 +191,18 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       id: z.string().describe('Trace subject id.'),
     },
     async ({ kind, id }) => {
+      if (kfdb && shouldPreferKfdbTrace(kind, id)) {
+        try {
+          return ok(await kfdb.trace(kind, id));
+        } catch (err) {
+          try {
+            return ok({ ...(await home.trace(kind, id) as Record<string, unknown>), kfdb_trace_error: err instanceof Error ? err.message : String(err) });
+          } catch {
+            return fail(err);
+          }
+        }
+      }
+
       try {
         const homeTrace = await home.trace(kind, id);
         if (kfdb && shouldUseKfdbTraceFallback(homeTrace)) {

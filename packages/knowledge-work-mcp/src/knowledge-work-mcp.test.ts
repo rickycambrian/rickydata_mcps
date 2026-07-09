@@ -4,7 +4,7 @@ import { FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
-import { shouldUseKfdbTraceFallback } from './tools.js';
+import { shouldPreferKfdbTrace, shouldUseKfdbTraceFallback } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
@@ -307,6 +307,13 @@ describe('trace fallback detection', () => {
       nodes: [{ id: 'claim:1' }],
       omissions: [{ reason: 'old-warning', detail: '401 Invalid API key' }],
     })).toBe(false);
+  });
+
+  it('prefers KFDB for exact wiki-claim and source-ref traces', () => {
+    expect(shouldPreferKfdbTrace('wiki-claim', 'claim-id')).toBe(true);
+    expect(shouldPreferKfdbTrace('anything', 'evidence:akc:build:abc')).toBe(true);
+    expect(shouldPreferKfdbTrace('anything', 'roadmap:akc-p10')).toBe(true);
+    expect(shouldPreferKfdbTrace('wiki-page', 'agentic-knowledge-compiler')).toBe(false);
   });
 });
 
