@@ -30,6 +30,19 @@ const labelsSchema = z
   .default(['WikiPage', 'OpenQuestion', 'HomeDecision', 'RoadmapItem'])
   .describe('Graph labels to search. Defaults to WikiPage, OpenQuestion, HomeDecision, RoadmapItem.');
 
+export function shouldUseKfdbTraceFallback(trace: unknown): boolean {
+  if (!trace || typeof trace !== 'object') return false;
+  const value = trace as Record<string, unknown>;
+  const nodes = Array.isArray(value['nodes']) ? value['nodes'] : null;
+  const omissions = Array.isArray(value['omissions']) ? value['omissions'] as Array<Record<string, unknown>> : [];
+  if (nodes && nodes.length > 0) return false;
+  return omissions.some((omission) => {
+    const reason = String(omission['reason'] ?? '');
+    const detail = String(omission['detail'] ?? '');
+    return /read-failed/i.test(reason) || /\b401\b|invalid api key/i.test(detail);
+  });
+}
+
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { home, kfdb } = deps;
 
@@ -173,7 +186,19 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     },
     async ({ kind, id }) => {
       try {
-        return ok(await home.trace(kind, id));
+        const homeTrace = await home.trace(kind, id);
+        if (kfdb && shouldUseKfdbTraceFallback(homeTrace)) {
+          try {
+            return ok({
+              ...(await kfdb.trace(kind, id) as Record<string, unknown>),
+              home_trace_confidence: (homeTrace as Record<string, unknown>)['confidence'],
+              home_trace_omissions: (homeTrace as Record<string, unknown>)['omissions'],
+            });
+          } catch {
+            /* Preserve the original home partial trace; the fallback is best-effort for read availability. */
+          }
+        }
+        return ok(homeTrace);
       } catch (err) {
         if (kfdb) {
           try {

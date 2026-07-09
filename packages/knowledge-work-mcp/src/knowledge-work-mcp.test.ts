@@ -4,6 +4,7 @@ import { FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
+import { shouldUseKfdbTraceFallback } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
@@ -288,6 +289,24 @@ describe('KFDB read/write auth split', () => {
       page: { slug: 'agentic-knowledge-compiler' },
       fallback: { source: 'kfdb_trace' },
     });
+  });
+});
+
+describe('trace fallback detection', () => {
+  it('falls back when home trace returns a partial read-failed omission with no nodes', () => {
+    expect(shouldUseKfdbTraceFallback({
+      confidence: 'partial',
+      nodes: [],
+      omissions: [{ reason: 'wiki-claim-read-failed', detail: 'Failed to query KQL: 401 Invalid API key' }],
+    })).toBe(true);
+  });
+
+  it('keeps complete home traces even when stale omissions exist', () => {
+    expect(shouldUseKfdbTraceFallback({
+      confidence: 'high',
+      nodes: [{ id: 'claim:1' }],
+      omissions: [{ reason: 'old-warning', detail: '401 Invalid API key' }],
+    })).toBe(false);
   });
 });
 
