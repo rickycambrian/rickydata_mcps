@@ -199,6 +199,10 @@ jobs:
       - name: Sync server in MCP gateway (instant single-entity refresh)
         run: |
           MCP_GW="${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}"
+          STOP_RESPONSE=$(curl -sf --max-time 30 -X POST "$MCP_GW/api/servers/${{ steps.kfdb.outputs.node_id }}/stop" \
+            -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
+            -H "Content-Type: application/json")
+          echo "Gateway stop: $STOP_RESPONSE"
           RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/health/reload/${{ steps.kfdb.outputs.node_id }}" \
             -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
             -H "Content-Type: application/json" || echo '{"error":"sync failed"}')
