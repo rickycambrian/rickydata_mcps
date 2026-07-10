@@ -250,7 +250,7 @@ export function shouldUseKfdbTraceFallback(trace: unknown): boolean {
 export function shouldPreferKfdbTrace(kind: string, id: string): boolean {
   const traceKind = kind.trim().toLowerCase();
   const target = id.trim().toLowerCase();
-  return traceKind === 'wiki-claim' || traceKind === 'wikiclaim' || /^(evidence|roadmap):/.test(target);
+  return ['wiki-claim', 'wikiclaim', 'knowledge-assertion', 'assertion'].includes(traceKind) || /^(evidence|roadmap):/.test(target);
 }
 
 export function withAssertionVoiceAnswer(kind: string, id: string, trace: unknown): unknown {
@@ -425,7 +425,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     async ({ kind, id }) => {
       if (kfdb && shouldPreferKfdbTrace(kind, id)) {
         try {
-          return ok(await kfdb.trace(kind, id));
+          return ok(withAssertionVoiceAnswer(kind, id, await kfdb.trace(kind, id)));
         } catch (err) {
           try {
             return ok({ ...(await home.trace(kind, id) as Record<string, unknown>), kfdb_trace_error: err instanceof Error ? err.message : String(err) });

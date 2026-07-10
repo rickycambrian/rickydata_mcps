@@ -302,6 +302,52 @@ describe('KFDB read/write auth split', () => {
     expect(trace.page).not.toHaveProperty('body_md');
   });
 
+  it('traces knowledge assertions directly from the KFDB assertion projection', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as Record<string, unknown>;
+      if (String(url).endsWith('/api/v1/query') && String(body['query']).includes('RickydataKnowledgeAssertion')) {
+        return jsonResponse({ data: [{
+          slug: 'zero-schema-law',
+          title: 'Zero schema law',
+          origin: 'repo',
+          status: 'active',
+          severity: 'hard',
+          comparator: 'atLeast',
+          expect_json: '{"n":1}',
+          anchor_json: '{"kind":"page","key":"dev-tycoon"}',
+          oracle_json: '{"kind":"wiki-query","claimTextRegex":"does not add schema"}',
+          source_sha256: 'abc',
+          created_by: 'repo:test',
+          updated_at: '2026-07-10T00:00:00.000Z',
+          rationale: 'Keep the invariant visible.',
+        }] });
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.trace('knowledge-assertion', 'zero-schema-law')).resolves.toMatchObject({
+      subject: { kind: 'knowledge-assertion', id: 'zero-schema-law' },
+      confidence: 'recorded',
+      nodes: [{
+        type: 'knowledge-assertion',
+        data: {
+          comparator: 'atLeast',
+          expectJson: '{"n":1}',
+          anchorJson: '{"kind":"page","key":"dev-tycoon"}',
+          oracleJson: '{"kind":"wiki-query","claimTextRegex":"does not add schema"}',
+        },
+      }],
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('ranks the fast KFDB knowledge-bundle OpenQuestion projection for next_questions', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
       const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as Record<string, unknown>;
@@ -566,6 +612,7 @@ describe('trace fallback detection', () => {
 
   it('prefers KFDB for exact wiki-claim and source-ref traces', () => {
     expect(shouldPreferKfdbTrace('wiki-claim', 'claim-id')).toBe(true);
+    expect(shouldPreferKfdbTrace('knowledge-assertion', 'zero-schema-law')).toBe(true);
     expect(shouldPreferKfdbTrace('anything', 'evidence:akc:build:abc')).toBe(true);
     expect(shouldPreferKfdbTrace('anything', 'roadmap:akc-p10')).toBe(true);
     expect(shouldPreferKfdbTrace('wiki-page', 'agentic-knowledge-compiler')).toBe(false);

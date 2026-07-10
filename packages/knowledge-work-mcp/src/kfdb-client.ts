@@ -587,6 +587,51 @@ export class KfdbKnowledgeClient {
     const target = id.trim();
     if (!target) throw new ApiError('kfdb', 400, 'trace id is required');
 
+    if (traceKind === 'knowledge-assertion' || traceKind === 'assertion') {
+      const assertionRows = await this.queryKql('MATCH (n:RickydataKnowledgeAssertion) RETURN n.* LIMIT 500');
+      const assertion = assertionRows
+        .map(unwrapRow)
+        .find((row) => str(row, 'slug') === target);
+      if (!assertion) throw new ApiError('kfdb', 404, `knowledge assertion trace not found: ${target}`);
+      const expectJson = str(assertion, 'expect_json');
+      const anchorJson = str(assertion, 'anchor_json');
+      const oracleJson = str(assertion, 'oracle_json');
+      let anchor: Record<string, unknown> = {};
+      let oracle: Record<string, unknown> = {};
+      try { anchor = JSON.parse(anchorJson) as Record<string, unknown>; } catch { /* Keep exact raw JSON in the trace. */ }
+      try { oracle = JSON.parse(oracleJson) as Record<string, unknown>; } catch { /* Keep exact raw JSON in the trace. */ }
+      const title = str(assertion, 'title') || target;
+      return {
+        subject: { kind: 'knowledge-assertion', id: target },
+        title,
+        confidence: 'recorded',
+        nodes: [{
+          ref: { kind: 'knowledge-assertion', id: target },
+          title,
+          type: 'knowledge-assertion',
+          data: {
+            slug: target,
+            origin: str(assertion, 'origin'),
+            status: str(assertion, 'status'),
+            severity: str(assertion, 'severity'),
+            comparator: str(assertion, 'comparator'),
+            anchorKind: String(anchor['kind'] ?? ''),
+            anchorKey: String(anchor['key'] ?? ''),
+            oracleKind: String(oracle['kind'] ?? ''),
+            expectJson,
+            anchorJson,
+            oracleJson,
+            sourceSha256: str(assertion, 'source_sha256'),
+            createdBy: str(assertion, 'created_by'),
+            updatedAt: str(assertion, 'updated_at'),
+            rationale: str(assertion, 'rationale'),
+          },
+        }],
+        edges: [],
+        omissions: [{ reason: 'latest-lint-run-omitted-from-fast-path' }],
+      };
+    }
+
     if (traceKind === 'wiki-page' || traceKind === 'wikipage' || traceKind === 'page') {
       return {
         kind: 'wiki-page',
