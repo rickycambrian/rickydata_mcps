@@ -4,7 +4,7 @@ import { FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
-import { resolveNextQuestions, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback } from './tools.js';
+import { resolveNextQuestions, resolveReviewPending, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
@@ -421,6 +421,26 @@ describe('KFDB read/write auth split', () => {
       ],
       fallback: { source: 'kfdb_open_questions', total_open: 12 },
     });
+  });
+
+  it('returns the KFDB review digest when Home exceeds the voice budget', async () => {
+    const home = {
+      reviewPending: vi.fn(() => new Promise<unknown>(() => {})),
+    };
+    const kfdb = {
+      nextQuestions: vi.fn(async () => ({
+        ranked: [{ id: 'core2', question: 'Has the physical Core2 streaming proof passed?' }],
+        total_ranked: 1,
+      })),
+    };
+
+    await expect(resolveReviewPending(home, kfdb, 5, 0)).resolves.toMatchObject({
+      items: [{ id: 'core2', title: 'Has the physical Core2 streaming proof passed?' }],
+      home_review_pending_timed_out: true,
+      fallback: { source: 'kfdb_open_questions' },
+    });
+    expect(home.reviewPending).toHaveBeenCalledWith(5);
+    expect(kfdb.nextQuestions).toHaveBeenCalledWith({ limit: 5 });
   });
 });
 

@@ -35,6 +35,10 @@ interface NextQuestionReader {
   nextQuestions(input: { topic?: string; limit: number }): Promise<unknown>;
 }
 
+interface ReviewPendingReader {
+  reviewPending(limit: number): Promise<unknown>;
+}
+
 export async function resolveNextQuestions(
   home: NextQuestionReader,
   kfdb: NextQuestionReader | null,
@@ -81,6 +85,30 @@ export async function resolveNextQuestions(
   }
 }
 
+async function readReviewPendingWithin(
+  home: ReviewPendingReader,
+  limit: number,
+  timeoutMs: number,
+): Promise<{ ok: true; value: unknown } | { ok: false; error: unknown; timedOut: boolean }> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      home.reviewPending(limit)
+        .then((value) => ({ ok: true as const, value }))
+        .catch((error: unknown) => ({ ok: false as const, error, timedOut: false as const })),
+      new Promise<{ ok: false; error: Error; timedOut: true }>((resolve) => {
+        timer = setTimeout(() => resolve({
+          ok: false,
+          error: new Error(`home review_pending timed out after ${timeoutMs}ms`),
+          timedOut: true,
+        }), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function queueItemCount(result: unknown): number {
   if (!result || typeof result !== 'object') return 0;
   const items = (result as Record<string, unknown>)['items'];
@@ -112,6 +140,47 @@ export function reviewPendingFallbackFromQuestions(result: unknown, limit: numbe
       ranking: 'value = blocking x gap x freshness x answerability; blocking and gap default to baseline in MCP fallback',
     },
   };
+}
+
+export async function resolveReviewPending(
+  home: ReviewPendingReader,
+  kfdb: NextQuestionReader | null,
+  limit: number,
+  homeTimeoutMs = 900,
+): Promise<unknown> {
+  const kfdbQuestions = kfdb
+    ? kfdb
+      .nextQuestions({ limit })
+      .then((value) => ({ ok: true as const, value }))
+      .catch((error: unknown) => ({ ok: false as const, error }))
+    : null;
+  const pending = await readReviewPendingWithin(home, limit, homeTimeoutMs);
+  if (pending.ok) {
+    if (queueItemCount(pending.value) > 0 || !kfdbQuestions) return pending.value;
+    const fallback = await kfdbQuestions;
+    if (fallback.ok) {
+      return {
+        ...reviewPendingFallbackFromQuestions(fallback.value, limit),
+        home_review_pending_empty: true,
+        home_counts: (pending.value as Record<string, unknown>)['counts'] ?? {},
+      };
+    }
+    return {
+      ...(pending.value as Record<string, unknown>),
+      kfdb_fallback_error: fallback.error instanceof Error ? fallback.error.message : String(fallback.error),
+    };
+  }
+  if (kfdbQuestions) {
+    const fallback = await kfdbQuestions;
+    if (fallback.ok) {
+      return {
+        ...reviewPendingFallbackFromQuestions(fallback.value, limit),
+        ...fallbackReason(pending.error),
+        ...(pending.timedOut ? { home_review_pending_timed_out: true } : {}),
+      };
+    }
+  }
+  throw pending.error;
 }
 
 const labelsSchema = z
@@ -411,32 +480,9 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       limit: z.number().int().min(1).max(20).optional().default(5),
     },
     async ({ limit }) => {
-      const kfdbQuestions = kfdb
-        ? kfdb
-          .nextQuestions({ limit })
-          .then((value) => ({ ok: true as const, value }))
-          .catch((error: unknown) => ({ ok: false as const, error }))
-        : null;
       try {
-        const pending = await home.reviewPending(limit);
-        if (queueItemCount(pending) > 0 || !kfdbQuestions) return ok(pending);
-        const fallback = await kfdbQuestions;
-        if (fallback.ok) {
-          return ok({
-            ...reviewPendingFallbackFromQuestions(fallback.value, limit),
-            home_review_pending_empty: true,
-            home_counts: (pending as Record<string, unknown>)['counts'] ?? {},
-          });
-        }
-        return ok({
-          ...(pending as Record<string, unknown>),
-          kfdb_fallback_error: fallback.error instanceof Error ? fallback.error.message : String(fallback.error),
-        });
+        return ok(await resolveReviewPending(home, kfdb, limit));
       } catch (err) {
-        if (kfdbQuestions) {
-          const fallback = await kfdbQuestions;
-          if (fallback.ok) return ok({ ...reviewPendingFallbackFromQuestions(fallback.value, limit), ...fallbackReason(err) });
-        }
         return fail(err);
       }
     },
