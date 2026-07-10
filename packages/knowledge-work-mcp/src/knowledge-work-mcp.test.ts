@@ -703,6 +703,33 @@ describe('operator lane', () => {
     expect((census['sample'] as Array<{ kind: string }>)[0]!.kind).toBe('open_question');
   });
 
+  it('resolve_item reuses a recently read queue item instead of rebuilding the live queue', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ decision: { verified: true } }));
+    const home = authedHome(fetchImpl);
+    home.rememberQueueItems([{
+      id: 'wiki-update:policy:run-1',
+      kind: 'wiki_update',
+      title: 'Wiki update: Policy',
+      sourceRef: { label: 'RickydataWikiCompilerRun', nodeId: 'run-1', scope: 'private' },
+    }]);
+
+    await home.resolveItem('wiki-update:policy:run-1', 'approve', 'Operator approved.');
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]![0])).toBe('https://home.test/api/hitl/decision');
+    expect(JSON.parse(String((fetchImpl.mock.calls[0]![1] as RequestInit).body))).toEqual({
+      item: {
+        id: 'wiki-update:policy:run-1',
+        kind: 'wiki_update',
+        title: 'Wiki update: Policy',
+        sourceRef: { label: 'RickydataWikiCompilerRun', nodeId: 'run-1', scope: 'private' },
+      },
+      action: 'approve',
+      answer: 'Operator approved.',
+      confidence: 1,
+    });
+  });
+
   it('bulk_decide enforces the 100-id chunk cap before any network egress', async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const home = authedHome(fetchImpl);

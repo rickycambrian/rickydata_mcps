@@ -554,7 +554,9 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     },
     async ({ limit }) => {
       try {
-        return ok(await resolveReviewPending(home, kfdb, limit));
+        const pending = await resolveReviewPending(home, kfdb, limit);
+        home.rememberQueueItems(queueItems(pending));
+        return ok(pending);
       } catch (err) {
         return fail(err);
       }

@@ -46,6 +46,7 @@ export class HomeKnowledgeClient {
   private readonly fetchImpl: typeof fetch;
   private readonly mintToken: (opts: MintWalletTokenOptions) => Promise<string>;
   private readonly tokenTtlSeconds?: number;
+  private readonly rememberedQueueItems = new Map<string, { item: QueueItem; rememberedAt: number }>();
 
   constructor(deps: HomeClientDeps) {
     this.baseUrl = deps.baseUrl.replace(/\/$/, '');
@@ -156,6 +157,34 @@ export class HomeKnowledgeClient {
     };
   }
 
+  rememberQueueItems(items: Array<Record<string, unknown>>): void {
+    const rememberedAt = Date.now();
+    for (const value of items) {
+      const id = typeof value['id'] === 'string' ? value['id'].trim() : '';
+      const kind = typeof value['kind'] === 'string' ? value['kind'].trim() : '';
+      const title = typeof value['title'] === 'string' ? value['title'].trim() : '';
+      const sourceRef = value['sourceRef'];
+      if (!id || !kind || !title || !sourceRef || typeof sourceRef !== 'object') continue;
+      const label = typeof (sourceRef as Record<string, unknown>)['label'] === 'string'
+        ? String((sourceRef as Record<string, unknown>)['label']).trim()
+        : '';
+      const scope = (sourceRef as Record<string, unknown>)['scope'];
+      if (!label || (scope !== 'private' && scope !== 'global')) continue;
+      const nodeId = typeof (sourceRef as Record<string, unknown>)['nodeId'] === 'string'
+        ? String((sourceRef as Record<string, unknown>)['nodeId'])
+        : undefined;
+      this.rememberedQueueItems.set(id, {
+        item: {
+          id,
+          kind,
+          title,
+          sourceRef: { label, ...(nodeId ? { nodeId } : {}), scope },
+        },
+        rememberedAt,
+      });
+    }
+  }
+
   private async findQueueItem(itemId: string): Promise<QueueItem | null> {
     const body = await this.requestJson<{ items?: QueueItem[] }>('GET', '/api/hitl/queue?limit=200');
     return (Array.isArray(body.items) ? body.items : []).find((item) => item.id === itemId) ?? null;
@@ -178,14 +207,19 @@ export class HomeKnowledgeClient {
   }
 
   async resolveItem(itemId: string, verdict: 'approve' | 'reject', note?: string): Promise<unknown> {
-    const item = await this.findQueueItem(itemId);
+    const remembered = this.rememberedQueueItems.get(itemId);
+    const item = remembered && Date.now() - remembered.rememberedAt <= 5 * 60_000
+      ? remembered.item
+      : await this.findQueueItem(itemId);
     if (!item) throw new Error(`pending item not found in live queue: ${itemId}`);
-    return this.requestJson('POST', '/api/hitl/decision', {
+    const result = await this.requestJson('POST', '/api/hitl/decision', {
       item: { id: item.id, kind: item.kind, title: item.title, sourceRef: item.sourceRef },
       action: verdict,
       ...(note?.trim() ? { answer: note.trim() } : {}),
       confidence: 1,
     });
+    this.rememberedQueueItems.delete(itemId);
+    return result;
   }
 
   // -------------------------------------------------------------------------
