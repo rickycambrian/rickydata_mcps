@@ -11,6 +11,11 @@ on:
         required: false
         default: 'false'
         type: boolean
+      refresh_source:
+        description: 'Refresh the existing source-backed gateway server without publishing npm'
+        required: false
+        default: 'false'
+        type: boolean
 
 concurrency:
   group: publish-knowledge-work-mcp-${{ github.ref }}
@@ -63,7 +68,7 @@ jobs:
           fi
 
       - name: Bump patch version
-        if: inputs.skip_version_bump != true
+        if: inputs.skip_version_bump != true && inputs.refresh_source != true
         run: npm version patch --no-git-tag-version --workspace @rickydata/knowledge-work-mcp
 
       - name: Capture version
@@ -74,6 +79,7 @@ jobs:
 
       - name: Skip if already published
         id: check
+        if: inputs.refresh_source != true
         run: |
           if npm view "@rickydata/knowledge-work-mcp@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -84,7 +90,7 @@ jobs:
 
       - name: Publish to npm
         id: publish
-        if: steps.check.outputs.exists == 'false'
+        if: inputs.refresh_source != true && steps.check.outputs.exists == 'false'
         # Publish from inside the package dir. `npm publish --workspace` can
         # 404 on first publish of a new scoped package.
         working-directory: packages/knowledge-work-mcp
@@ -94,10 +100,22 @@ jobs:
           NPM_CONFIG_PROVENANCE: 'true'
 
       - name: Verify published package
+        if: inputs.refresh_source != true
         run: |
           PUBLISHED=$(npm view "@rickydata/knowledge-work-mcp@${{ steps.ver.outputs.version }}" version)
           test "$PUBLISHED" = "${{ steps.ver.outputs.version }}"
           echo "::notice::Verified @rickydata/knowledge-work-mcp@$PUBLISHED on npm"
+
+      - name: Resolve registry mode
+        id: registry
+        run: |
+          if [ "${{ inputs.refresh_source }}" = "true" ]; then
+            echo "type=git" >> "$GITHUB_OUTPUT"
+            echo "::notice::Refreshing source-backed knowledge-work-mcp"
+          else
+            echo "type=npm" >> "$GITHUB_OUTPUT"
+            echo "::notice::Registering npm-backed knowledge-work-mcp"
+          fi
 
       - name: Build KFDB MCPServer payload
         id: payload
@@ -111,7 +129,7 @@ jobs:
             const fs=require('fs');
             const tools=JSON.parse(fs.readFileSync('/tmp/tools_available.json','utf8'));
             const v='${{ steps.ver.outputs.version }}';
-            const registryType='npm';
+            const registryType='${{ steps.registry.outputs.type }}';
             const pkg='@rickydata/knowledge-work-mcp';
             const sourceRepository='https://github.com/rickycambrian/rickydata_mcps';
             const packageSubdir='packages/knowledge-work-mcp';
@@ -122,8 +140,12 @@ jobs:
               {name:'HOME_API_URL',description:'Home API URL override; defaults to https://rickydata-home-2dbp4scmrq-uc.a.run.app.',required:false},
               {name:'KFDB_API_URL',description:'KFDB API URL override; defaults to https://db.rickydata.org.',required:false}
             ];
-            const installCommand='npx -y @rickydata/knowledge-work-mcp@'+v;
-            const runCommand='npx -y @rickydata/knowledge-work-mcp@'+v;
+            const installCommand=registryType === 'npm'
+              ? 'npx -y @rickydata/knowledge-work-mcp@'+v
+              : 'git clone '+sourceRepository+' && cd rickydata_mcps/'+packageSubdir+' && npm install && npm run build';
+            const runCommand=registryType === 'npm'
+              ? 'npx -y @rickydata/knowledge-work-mcp@'+v
+              : 'npm start';
             const payload={operations:[{operation:'create_node',id:'3883e5df-de92-5c4d-9c09-f4f79a62e22d',label:'MCPServer',mode:'merge',properties:{
               name:{String:'knowledge-work-mcp'},
               server_name:{String:'knowledge-work-mcp'},
@@ -186,7 +208,7 @@ jobs:
             || echo "::warning::gateway single-server sync failed (will pick up on next 10-min cycle)"
 
       - name: Commit version bump
-        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != true
+        if: steps.publish.outcome == 'success' && inputs.skip_version_bump != true && inputs.refresh_source != true
         run: |
           set -e
           git config user.name "github-actions[bot]"
@@ -216,5 +238,5 @@ jobs:
           echo "- **Tools**: ${{ steps.tools.outputs.count }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Already on npm**: ${{ steps.check.outputs.exists }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Publish**: ${{ steps.publish.outcome || 'skipped' }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Registry mode**: npm (required)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Registry mode**: ${{ steps.registry.outputs.type || 'unknown' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **MCPServer id**: 3883e5df-de92-5c4d-9c09-f4f79a62e22d" >> "$GITHUB_STEP_SUMMARY"
