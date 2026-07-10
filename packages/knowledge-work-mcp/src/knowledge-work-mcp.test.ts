@@ -4,7 +4,7 @@ import { FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
-import { resolveNextQuestions, resolveReviewPending, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback } from './tools.js';
+import { resolveNextQuestions, resolveReviewPending, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, withAssertionVoiceAnswer } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
@@ -531,6 +531,23 @@ describe('KFDB read/write auth split', () => {
 });
 
 describe('trace fallback detection', () => {
+  it('adds a canonical exact answer to knowledge-assertion traces', () => {
+    expect(withAssertionVoiceAnswer('knowledge-assertion', 'zero-schema-law', {
+      nodes: [{
+        type: 'knowledge-assertion',
+        data: {
+          comparator: 'atLeast',
+          expectJson: '{"n":1}',
+          anchorJson: '{"kind":"page","key":"dev-tycoon"}',
+          oracleJson: '{"kind":"wiki-query","claimTextRegex":"does not add schema"}',
+        },
+      }],
+      edges: [{ relation: 'evaluated_by', data: { status: 'pass' } }],
+    })).toMatchObject({
+      answer: 'Assertion slug zero-schema-law: comparator atLeast; expect {"n":1}; anchor {"kind":"page","key":"dev-tycoon"}; oracle {"kind":"wiki-query","claimTextRegex":"does not add schema"}; latest lint status pass.',
+    });
+  });
+
   it('falls back when home trace returns a partial read-failed omission with no nodes', () => {
     expect(shouldUseKfdbTraceFallback({
       confidence: 'partial',

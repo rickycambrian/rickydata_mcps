@@ -253,6 +253,34 @@ export function shouldPreferKfdbTrace(kind: string, id: string): boolean {
   return traceKind === 'wiki-claim' || traceKind === 'wikiclaim' || /^(evidence|roadmap):/.test(target);
 }
 
+export function withAssertionVoiceAnswer(kind: string, id: string, trace: unknown): unknown {
+  const traceKind = kind.trim().toLowerCase();
+  if (!['knowledge-assertion', 'assertion'].includes(traceKind) || !trace || typeof trace !== 'object') return trace;
+  const value = trace as Record<string, unknown>;
+  if (typeof value['answer'] === 'string' && value['answer'].trim()) return trace;
+  const nodes = Array.isArray(value['nodes']) ? value['nodes'] as Array<Record<string, unknown>> : [];
+  const assertionNode = nodes.find((node) => {
+    const ref = node['ref'];
+    return node['type'] === 'knowledge-assertion' || (ref && typeof ref === 'object' && (ref as Record<string, unknown>)['kind'] === 'knowledge-assertion');
+  });
+  const data = assertionNode?.['data'];
+  if (!data || typeof data !== 'object') return trace;
+  const fields = data as Record<string, unknown>;
+  const comparator = String(fields['comparator'] ?? '').trim();
+  const expectJson = String(fields['expectJson'] ?? '').trim();
+  const anchorJson = String(fields['anchorJson'] ?? '').trim();
+  const oracleJson = String(fields['oracleJson'] ?? '').trim();
+  if (!comparator || !expectJson || !anchorJson || !oracleJson) return trace;
+  const edges = Array.isArray(value['edges']) ? value['edges'] as Array<Record<string, unknown>> : [];
+  const evaluated = edges.find((edge) => edge['relation'] === 'evaluated_by');
+  const edgeData = evaluated?.['data'];
+  const lintStatus = edgeData && typeof edgeData === 'object'
+    ? String((edgeData as Record<string, unknown>)['status'] ?? '').trim()
+    : '';
+  const answer = `Assertion slug ${id}: comparator ${comparator}; expect ${expectJson}; anchor ${anchorJson}; oracle ${oracleJson}${lintStatus ? `; latest lint status ${lintStatus}` : ''}.`;
+  return { ...value, answer };
+}
+
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { home, kfdb, operatorTools = false } = deps;
 
@@ -408,7 +436,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       }
 
       try {
-        const homeTrace = await home.trace(kind, id);
+        const homeTrace = withAssertionVoiceAnswer(kind, id, await home.trace(kind, id));
         if (kfdb && shouldUseKfdbTraceFallback(homeTrace)) {
           try {
             return ok({
