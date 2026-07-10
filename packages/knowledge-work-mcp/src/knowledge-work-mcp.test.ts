@@ -4,7 +4,7 @@ import { FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
-import { reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback } from './tools.js';
+import { resolveNextQuestions, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
@@ -364,6 +364,29 @@ describe('KFDB read/write auth split', () => {
       fallback: { source: 'kfdb_agent_knowledge', total_open: 1 },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a nonempty topic-scoped KFDB projection without waiting for Home', async () => {
+    const home = {
+      nextQuestions: vi.fn(async () => {
+        throw new Error('topic-scoped fast path should not call Home');
+      }),
+    };
+    const kfdb = {
+      nextQuestions: vi.fn(async () => ({
+        ranked: [{ id: 'core2' }],
+        total_ranked: 1,
+      })),
+    };
+
+    await expect(
+      resolveNextQuestions(home, kfdb, { topic: 'Core2', limit: 3 }),
+    ).resolves.toMatchObject({
+      ranked: [{ id: 'core2' }],
+      topic_scoped_fast_path: true,
+    });
+    expect(home.nextQuestions).not.toHaveBeenCalled();
+    expect(kfdb.nextQuestions).toHaveBeenCalledWith({ topic: 'Core2', limit: 3 });
   });
 
   it('maps KFDB OpenQuestions into a spoken review_pending fallback digest', () => {

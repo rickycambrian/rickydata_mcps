@@ -31,6 +31,56 @@ function rankedCount(result: unknown): number {
   return Array.isArray(ranked) ? ranked.length : 0;
 }
 
+interface NextQuestionReader {
+  nextQuestions(input: { topic?: string; limit: number }): Promise<unknown>;
+}
+
+export async function resolveNextQuestions(
+  home: NextQuestionReader,
+  kfdb: NextQuestionReader | null,
+  input: { topic?: string; limit: number },
+): Promise<unknown> {
+  const kfdbQuestions = kfdb
+    ? kfdb
+      .nextQuestions(input)
+      .then((value) => ({ ok: true as const, value }))
+      .catch((error: unknown) => ({ ok: false as const, error }))
+    : null;
+
+  if (input.topic?.trim() && kfdbQuestions) {
+    const focused = await kfdbQuestions;
+    if (focused.ok && rankedCount(focused.value) > 0) {
+      return {
+        ...(focused.value as Record<string, unknown>),
+        topic_scoped_fast_path: true,
+      };
+    }
+  }
+
+  try {
+    const homeQuestions = await home.nextQuestions(input);
+    if (rankedCount(homeQuestions) > 0 || !kfdbQuestions) return homeQuestions;
+    const fallback = await kfdbQuestions;
+    if (fallback.ok) {
+      return {
+        ...(fallback.value as Record<string, unknown>),
+        home_next_questions_empty: true,
+        home_total_ranked: (homeQuestions as Record<string, unknown>)['total_ranked'] ?? 0,
+      };
+    }
+    return {
+      ...(homeQuestions as Record<string, unknown>),
+      kfdb_fallback_error: fallback.error instanceof Error ? fallback.error.message : String(fallback.error),
+    };
+  } catch (err) {
+    if (kfdbQuestions) {
+      const fallback = await kfdbQuestions;
+      if (fallback.ok) return { ...(fallback.value as Record<string, unknown>), ...fallbackReason(err) };
+    }
+    throw err;
+  }
+}
+
 function queueItemCount(result: unknown): number {
   if (!result || typeof result !== 'object') return 0;
   const items = (result as Record<string, unknown>)['items'];
@@ -330,32 +380,9 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       limit: z.number().int().min(1).max(10).optional().default(3),
     },
     async ({ topic, limit }) => {
-      const kfdbQuestions = kfdb
-        ? kfdb
-          .nextQuestions({ topic, limit })
-          .then((value) => ({ ok: true as const, value }))
-          .catch((error: unknown) => ({ ok: false as const, error }))
-        : null;
       try {
-        const homeQuestions = await home.nextQuestions({ topic, limit });
-        if (rankedCount(homeQuestions) > 0 || !kfdbQuestions) return ok(homeQuestions);
-        const fallback = await kfdbQuestions;
-        if (fallback.ok) {
-          return ok({
-            ...(fallback.value as Record<string, unknown>),
-            home_next_questions_empty: true,
-            home_total_ranked: (homeQuestions as Record<string, unknown>)['total_ranked'] ?? 0,
-          });
-        }
-        return ok({
-          ...(homeQuestions as Record<string, unknown>),
-          kfdb_fallback_error: fallback.error instanceof Error ? fallback.error.message : String(fallback.error),
-        });
+        return ok(await resolveNextQuestions(home, kfdb, { topic, limit }));
       } catch (err) {
-        if (kfdbQuestions) {
-          const fallback = await kfdbQuestions;
-          if (fallback.ok) return ok({ ...(fallback.value as Record<string, unknown>), ...fallbackReason(err) });
-        }
         return fail(err);
       }
     },
