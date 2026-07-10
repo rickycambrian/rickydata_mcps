@@ -72,6 +72,14 @@ type RoadmapItemRow = {
   status: string;
 };
 
+type PendingWikiReviewItem = {
+  id: string;
+  kind: 'wiki_update' | 'wiki_contradiction';
+  title: string;
+  reason: string;
+  sourceRef: { label: 'RickydataWikiCompilerRun'; nodeId: string; scope: 'private' };
+};
+
 const QUESTION_ROT_DAYS = 14;
 const BLOCKING_IN_PROGRESS = 1.0;
 const BLOCKING_NEXT = 0.7;
@@ -163,6 +171,49 @@ function str(row: Record<string, unknown>, key: string): string {
 function num(row: Record<string, unknown>, key: string): number {
   const value = unwrap(row[key]);
   return typeof value === 'number' ? value : 0;
+}
+
+function pendingWikiReviewItems(rows: Record<string, unknown>[]): PendingWikiReviewItem[] {
+  const runs = rows
+    .map(unwrapRow)
+    .sort((a, b) => str(b, 'started_at').localeCompare(str(a, 'started_at')));
+  const byPage = new Map<string, PendingWikiReviewItem>();
+
+  for (const run of runs) {
+    const runId = str(run, 'run_id');
+    const runNodeId = str(run, '_id');
+    if (!runId || !runNodeId) continue;
+    let diffs: Array<Record<string, unknown>> = [];
+    try {
+      const parsed = JSON.parse(str(run, 'diffs_json') || '[]') as unknown;
+      if (Array.isArray(parsed)) diffs = parsed.filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object');
+    } catch {
+      continue;
+    }
+    for (const stored of diffs) {
+      if (stored['status'] !== 'pending') continue;
+      const kind = stored['kind'] === 'wiki_contradiction' ? 'wiki_contradiction' : 'wiki_update';
+      const diff = stored['diff'];
+      if (!diff || typeof diff !== 'object') continue;
+      const value = diff as Record<string, unknown>;
+      const pageSlug = String(value['pageSlug'] ?? '').trim();
+      if (!pageSlug) continue;
+      const existing = byPage.get(pageSlug);
+      if (existing?.kind === 'wiki_contradiction' || (existing && kind !== 'wiki_contradiction')) continue;
+      const title = String(value['title'] ?? pageSlug).trim() || pageSlug;
+      const op = String(value['op'] ?? 'update').trim() || 'update';
+      byPage.set(pageSlug, {
+        id: `wiki-update:${pageSlug}:${runId}`,
+        kind,
+        title: kind === 'wiki_contradiction' ? `Wiki contradiction on "${title}"` : `Wiki ${op}: ${title}`,
+        reason: String(value['rationale'] ?? '').trim() || (kind === 'wiki_contradiction'
+          ? 'The compiler found a claim conflict that requires operator review.'
+          : `The compiler proposes ${op === 'create' ? 'a new page' : 'a page update'} for review.`),
+        sourceRef: { label: 'RickydataWikiCompilerRun', nodeId: runNodeId, scope: 'private' },
+      });
+    }
+  }
+  return [...byPage.values()];
 }
 
 function wikiPageOf(row: Record<string, unknown>): WikiPageRow | null {
@@ -620,6 +671,46 @@ export class KfdbKnowledgeClient {
         ranking: 'value = blocking x gap x freshness x answerability; blocking and gap default to baseline in MCP fallback',
         diagnostics: bundle.diagnostics ?? {},
         reproducibility_hash: bundle.reproducibility_hash,
+      },
+    };
+  }
+
+  async reviewPending(limit = 5): Promise<unknown> {
+    const [runsRead, questionsRead] = await Promise.allSettled([
+      this.queryKql('MATCH (n:RickydataWikiCompilerRun) RETURN n.* LIMIT 500'),
+      this.nextQuestions({ limit }),
+    ]);
+    if (runsRead.status === 'rejected' && questionsRead.status === 'rejected') throw runsRead.reason;
+
+    const wikiItems = runsRead.status === 'fulfilled' ? pendingWikiReviewItems(runsRead.value) : [];
+    const questionValue = questionsRead.status === 'fulfilled' && questionsRead.value && typeof questionsRead.value === 'object'
+      ? questionsRead.value as Record<string, unknown>
+      : {};
+    const ranked = Array.isArray(questionValue['ranked']) ? questionValue['ranked'] as Array<Record<string, unknown>> : [];
+    const questionItems = ranked.map((question) => {
+      const id = String(question['id'] ?? '').trim();
+      return {
+        id,
+        kind: 'open_question',
+        title: String(question['question'] ?? '').trim() || `Open question ${id || 'unknown'}`,
+        reason: String(question['whyItMatters'] ?? question['why_it_matters'] ?? '').trim() || 'Open question awaiting an operator answer.',
+        sourceRef: { label: 'OpenQuestion', nodeId: id, scope: 'private' as const },
+      };
+    }).filter((item) => item.id);
+    const items = [...wikiItems, ...questionItems].slice(0, Math.max(1, limit));
+    const counts: Record<string, number> = {};
+    for (const item of items) counts[item.kind] = (counts[item.kind] ?? 0) + 1;
+
+    return {
+      counts,
+      items,
+      fallback: {
+        source: 'kfdb_pending_projection',
+        reason: 'home review_pending unavailable or empty; merged pending compiler diffs ahead of ranked open questions',
+        total_pending_wiki: wikiItems.length,
+        total_open: typeof questionValue['total_ranked'] === 'number' ? questionValue['total_ranked'] : ranked.length,
+        ...(runsRead.status === 'rejected' ? { wiki_error: runsRead.reason instanceof Error ? runsRead.reason.message : String(runsRead.reason) } : {}),
+        ...(questionsRead.status === 'rejected' ? { questions_error: questionsRead.reason instanceof Error ? questionsRead.reason.message : String(questionsRead.reason) } : {}),
       },
     };
   }

@@ -144,23 +144,23 @@ export function reviewPendingFallbackFromQuestions(result: unknown, limit: numbe
 
 export async function resolveReviewPending(
   home: ReviewPendingReader,
-  kfdb: NextQuestionReader | null,
+  kfdb: ReviewPendingReader | null,
   limit: number,
   homeTimeoutMs = 900,
 ): Promise<unknown> {
-  const kfdbQuestions = kfdb
+  const kfdbPending = kfdb
     ? kfdb
-      .nextQuestions({ limit })
+      .reviewPending(limit)
       .then((value) => ({ ok: true as const, value }))
       .catch((error: unknown) => ({ ok: false as const, error }))
     : null;
   const pending = await readReviewPendingWithin(home, limit, homeTimeoutMs);
   if (pending.ok) {
-    if (queueItemCount(pending.value) > 0 || !kfdbQuestions) return pending.value;
-    const fallback = await kfdbQuestions;
+    if (queueItemCount(pending.value) > 0 || !kfdbPending) return pending.value;
+    const fallback = await kfdbPending;
     if (fallback.ok) {
       return {
-        ...reviewPendingFallbackFromQuestions(fallback.value, limit),
+        ...(fallback.value as Record<string, unknown>),
         home_review_pending_empty: true,
         home_counts: (pending.value as Record<string, unknown>)['counts'] ?? {},
       };
@@ -170,11 +170,11 @@ export async function resolveReviewPending(
       kfdb_fallback_error: fallback.error instanceof Error ? fallback.error.message : String(fallback.error),
     };
   }
-  if (kfdbQuestions) {
-    const fallback = await kfdbQuestions;
+  if (kfdbPending) {
+    const fallback = await kfdbPending;
     if (fallback.ok) {
       return {
-        ...reviewPendingFallbackFromQuestions(fallback.value, limit),
+        ...(fallback.value as Record<string, unknown>),
         ...fallbackReason(pending.error),
         ...(pending.timedOut ? { home_review_pending_timed_out: true } : {}),
       };

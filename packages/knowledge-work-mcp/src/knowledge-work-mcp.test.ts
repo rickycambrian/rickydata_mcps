@@ -366,6 +366,65 @@ describe('KFDB read/write auth split', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('projects pending WikiDiffs ahead of OpenQuestions for review_pending', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+      if (String(url).endsWith('/api/v1/query')) {
+        return jsonResponse({
+          data: [{
+            _id: 'run-node-1',
+            run_id: 'run-1',
+            started_at: '2026-07-10T05:38:24.390Z',
+            diffs_json: JSON.stringify([{
+              kind: 'wiki_update',
+              status: 'pending',
+              diff: {
+                pageSlug: 'rickydata-main-branch-policy',
+                op: 'create',
+                title: 'rickydata Main-Branch Policy',
+                rationale: 'The operator answered the branch-policy question.',
+              },
+            }]),
+          }],
+        });
+      }
+      if (String(url).endsWith('/api/v1/agent/knowledge')) {
+        return jsonResponse({
+          open_questions: [{
+            id: 'oq-core2',
+            question: 'Has the physical Core2 streaming proof passed?',
+            status: 'open',
+          }],
+        });
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.reviewPending(3)).resolves.toMatchObject({
+      counts: { wiki_update: 1, open_question: 1 },
+      items: [
+        {
+          id: 'wiki-update:rickydata-main-branch-policy:run-1',
+          kind: 'wiki_update',
+          title: 'Wiki create: rickydata Main-Branch Policy',
+          sourceRef: { label: 'RickydataWikiCompilerRun', nodeId: 'run-node-1', scope: 'private' },
+        },
+        {
+          id: 'oq-core2',
+          kind: 'open_question',
+          title: 'Has the physical Core2 streaming proof passed?',
+        },
+      ],
+      fallback: { source: 'kfdb_pending_projection' },
+    });
+  });
+
   it('returns a nonempty topic-scoped KFDB projection without waiting for Home', async () => {
     const home = {
       nextQuestions: vi.fn(async () => {
@@ -428,19 +487,20 @@ describe('KFDB read/write auth split', () => {
       reviewPending: vi.fn(() => new Promise<unknown>(() => {})),
     };
     const kfdb = {
-      nextQuestions: vi.fn(async () => ({
-        ranked: [{ id: 'core2', question: 'Has the physical Core2 streaming proof passed?' }],
-        total_ranked: 1,
+      reviewPending: vi.fn(async () => ({
+        items: [{ id: 'core2', kind: 'open_question', title: 'Has the physical Core2 streaming proof passed?' }],
+        counts: { open_question: 1 },
+        fallback: { source: 'kfdb_pending_projection' },
       })),
     };
 
     await expect(resolveReviewPending(home, kfdb, 5, 0)).resolves.toMatchObject({
       items: [{ id: 'core2', title: 'Has the physical Core2 streaming proof passed?' }],
       home_review_pending_timed_out: true,
-      fallback: { source: 'kfdb_open_questions' },
+      fallback: { source: 'kfdb_pending_projection' },
     });
     expect(home.reviewPending).toHaveBeenCalledWith(5);
-    expect(kfdb.nextQuestions).toHaveBeenCalledWith({ limit: 5 });
+    expect(kfdb.reviewPending).toHaveBeenCalledWith(5);
   });
 });
 
