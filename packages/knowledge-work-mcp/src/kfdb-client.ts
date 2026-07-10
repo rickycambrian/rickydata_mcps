@@ -663,7 +663,7 @@ export class KfdbKnowledgeClient {
       kind: typeof pageRecord['kind'] === 'string' ? pageRecord['kind'] : undefined,
       status: typeof pageRecord['status'] === 'string' ? pageRecord['status'] : undefined,
     };
-    const rawAnswer = `${claimText} (page ${pageSlug}; claim ${claim.id}; ${verified ? 'verified' : 'recorded but not yet verified'}).`;
+    const rawAnswer = `Page ${pageSlug}; claim ${claim.id}; ${verified ? 'verified' : 'recorded but not yet verified'}. ${claimText}`;
     const answer = voiceSafeDurations(rawAnswer);
 
     return {
