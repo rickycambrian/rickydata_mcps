@@ -115,6 +115,42 @@ function queueItemCount(result: unknown): number {
   return Array.isArray(items) ? items.length : 0;
 }
 
+function queueItems(result: unknown): Array<Record<string, unknown>> {
+  if (!result || typeof result !== 'object') return [];
+  const items = (result as Record<string, unknown>)['items'];
+  return Array.isArray(items)
+    ? items.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function mergeReviewPendingResults(kfdb: unknown, home: unknown, limit: number): Record<string, unknown> {
+  const kfdbItems = queueItems(kfdb);
+  const homeItems = queueItems(home);
+  const freshPending = kfdbItems.filter((item) => item['kind'] !== 'open_question');
+  const kfdbQuestions = kfdbItems.filter((item) => item['kind'] === 'open_question');
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const item of [...freshPending, ...homeItems, ...kfdbQuestions]) {
+    const id = String(item['id'] ?? '').trim();
+    if (id && !byId.has(id)) byId.set(id, item);
+  }
+  const items = [...byId.values()].slice(0, Math.max(1, limit));
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    const kind = String(item['kind'] ?? 'unknown');
+    counts[kind] = (counts[kind] ?? 0) + 1;
+  }
+  const kfdbValue = kfdb && typeof kfdb === 'object' ? kfdb as Record<string, unknown> : {};
+  const homeValue = home && typeof home === 'object' ? home as Record<string, unknown> : {};
+  return {
+    ...homeValue,
+    ...(kfdbValue['fallback'] ? { fallback: kfdbValue['fallback'] } : {}),
+    counts,
+    items,
+    home_counts: homeValue['counts'] ?? {},
+    merged_pending_sources: true,
+  };
+}
+
 export function reviewPendingFallbackFromQuestions(result: unknown, limit: number): Record<string, unknown> {
   const value = result && typeof result === 'object' ? result as Record<string, unknown> : {};
   const ranked = Array.isArray(value['ranked']) ? value['ranked'] as Array<Record<string, unknown>> : [];
@@ -156,13 +192,22 @@ export async function resolveReviewPending(
     : null;
   const pending = await readReviewPendingWithin(home, limit, homeTimeoutMs);
   if (pending.ok) {
-    if (queueItemCount(pending.value) > 0 || !kfdbPending) return pending.value;
+    if (!kfdbPending) return pending.value;
     const fallback = await kfdbPending;
     if (fallback.ok) {
+      if (queueItemCount(pending.value) > 0) {
+        return mergeReviewPendingResults(fallback.value, pending.value, limit);
+      }
       return {
         ...(fallback.value as Record<string, unknown>),
         home_review_pending_empty: true,
         home_counts: (pending.value as Record<string, unknown>)['counts'] ?? {},
+      };
+    }
+    if (queueItemCount(pending.value) > 0) {
+      return {
+        ...(pending.value as Record<string, unknown>),
+        kfdb_fallback_error: fallback.error instanceof Error ? fallback.error.message : String(fallback.error),
       };
     }
     return {

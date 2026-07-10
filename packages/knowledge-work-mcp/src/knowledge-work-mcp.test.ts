@@ -502,6 +502,32 @@ describe('KFDB read/write auth split', () => {
     expect(home.reviewPending).toHaveBeenCalledWith(5);
     expect(kfdb.reviewPending).toHaveBeenCalledWith(5);
   });
+
+  it('merges fresh KFDB pending diffs ahead of a nonempty Home queue', async () => {
+    const home = {
+      reviewPending: vi.fn(async () => ({
+        items: [{ id: 'issue-1', kind: 'issue', title: 'Review issue one' }],
+        counts: { issue: 1 },
+      })),
+    };
+    const kfdb = {
+      reviewPending: vi.fn(async () => ({
+        items: [{ id: 'wiki-update:policy:run-1', kind: 'wiki_update', title: 'Wiki create: Policy' }],
+        counts: { wiki_update: 1 },
+        fallback: { source: 'kfdb_pending_projection' },
+      })),
+    };
+
+    await expect(resolveReviewPending(home, kfdb, 5)).resolves.toMatchObject({
+      items: [
+        { id: 'wiki-update:policy:run-1' },
+        { id: 'issue-1' },
+      ],
+      counts: { wiki_update: 1, issue: 1 },
+      home_counts: { issue: 1 },
+      merged_pending_sources: true,
+    });
+  });
 });
 
 describe('trace fallback detection', () => {
