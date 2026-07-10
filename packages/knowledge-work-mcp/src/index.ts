@@ -27,7 +27,11 @@ const home = new HomeKnowledgeClient({
 });
 const kfdb = loadKfdbClientFromEnv({ ...env, KFDB_API_URL: kfdbApiUrl }, s2d);
 
-registerTools(server, { home, kfdb });
+registerTools(server, {
+  home,
+  kfdb,
+  operatorTools: env.KNOWLEDGE_WORK_MCP_OPERATOR_TOOLS?.trim().toLowerCase() === 'true',
+});
 
 async function main() {
   const useHttp = env.TRANSPORT === 'http' || env.PORT;

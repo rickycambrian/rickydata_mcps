@@ -9,6 +9,7 @@ import { buildDiscoveryCapture, buildOpenQuestionCapture } from './atoms.js';
 export interface RegisterToolsDeps {
   home: HomeKnowledgeClient;
   kfdb: KfdbKnowledgeClient | null;
+  operatorTools?: boolean;
 }
 
 function requireKfdb(client: KfdbKnowledgeClient | null): KfdbKnowledgeClient {
@@ -89,7 +90,7 @@ export function shouldPreferKfdbTrace(kind: string, id: string): boolean {
 }
 
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
-  const { home, kfdb } = deps;
+  const { home, kfdb, operatorTools = false } = deps;
 
   server.tool(
     'session_brief',
@@ -414,12 +415,9 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     },
   );
 
-  // ---------------------------------------------------------------------------
-  // Operator lane — the queue-drain / Knowledge-CI surface operator sessions
-  // previously re-implemented as throwaway scripts (2026-07-09 rollout).
-  // ---------------------------------------------------------------------------
-
-  server.tool(
+  // Operator sessions may opt into the queue-drain surface. The voice partner
+  // defaults to the exact 15-tool SPEC-026 contract.
+  if (operatorTools) server.tool(
     'queue_census',
     'Full-depth HITL queue census: per-kind counts over the whole ranked queue (not a display page) plus a small sample, optionally filtered to one kind. Use before/after bulk operations to verify drains actually landed.',
     {
@@ -436,7 +434,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     },
   );
 
-  server.tool(
+  if (operatorTools) server.tool(
     'bulk_decide',
     'Bulk park/reject up to 100 HITL queue items in one verified write (the cockpit bulk-triage route). Approve is intentionally unsupported in bulk — wiki diffs must resolve individually. Chunk and repeat for larger drains, re-running queue_census between chunks.',
     {
@@ -452,7 +450,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     },
   );
 
-  server.tool(
+  if (operatorTools) server.tool(
     'batch_approve_wiki_diffs',
     'Apply every pending LOW-RISK wiki diff through the same recordDecision+apply path the queue uses (contradictions are never batch-approved). Long-running: on client timeout the server KEEPS applying — poll queue_census (kind wiki_update) to zero instead of re-firing.',
     {},
@@ -465,7 +463,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     },
   );
 
-  server.tool(
+  if (operatorTools) server.tool(
     'knowledge_lint',
     'Knowledge CI status: knownGood verdict + findings census (high-severity details included). knownGood=true is the gate the auto-apply lane and other consumers key on. With refresh=true the 16-check run recomputes (can take minutes; a client timeout means it continues server-side — re-read with refresh=false).',
     {
