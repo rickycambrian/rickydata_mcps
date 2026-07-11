@@ -820,10 +820,11 @@ export class KfdbKnowledgeClient {
   async codeContext(params: { task: string; repo?: string }): Promise<unknown> {
     const body: Record<string, unknown> = {
       query: params.task,
-      token_budget: 8000,
-      include_tests: true,
-      include_graph: true,
-      evidence_limit: 10,
+      token_budget: 3000,
+      include_tests: false,
+      include_graph: false,
+      evidence_limit: 4,
+      enable_sufficiency_gate: false,
     };
     let repoResolution: Record<string, unknown> | null = null;
     if (params.repo?.trim()) {
@@ -852,7 +853,30 @@ export class KfdbKnowledgeClient {
     );
     if (!repoResolution) return result;
     if (result && typeof result === 'object' && !Array.isArray(result)) {
-      return { ...(result as Record<string, unknown>), repo_resolution: repoResolution };
+      const value = result as Record<string, unknown>;
+      const evidence = Array.isArray(value['evidence_items']) ? value['evidence_items'] : [];
+      const scopedEvidence = evidence.filter((item) => {
+        if (!item || typeof item !== 'object') return false;
+        const streams = (item as Record<string, unknown>)['stream_hits'];
+        return Array.isArray(streams)
+          && streams.some((stream) => stream === 'fts' || stream === 'dense' || stream === 'symbol');
+      });
+      const dropped = evidence.length - scopedEvidence.length;
+      const diagnostics = value['diagnostics'] && typeof value['diagnostics'] === 'object'
+        ? value['diagnostics'] as Record<string, unknown>
+        : {};
+      return {
+        ...value,
+        evidence_items: scopedEvidence,
+        graph_neighborhood: [],
+        diagnostics: {
+          ...diagnostics,
+          evidence_count: scopedEvidence.length,
+          repo_scope_filter_applied: true,
+          repo_scope_graph_only_dropped: dropped,
+        },
+        repo_resolution: repoResolution,
+      };
     }
     return { result, repo_resolution: repoResolution };
   }

@@ -126,12 +126,19 @@ describe('KFDB read/write auth split', () => {
           ],
         });
       }
-      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as { repo_scope?: string[] };
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as Record<string, unknown>;
       expect(body.repo_scope).toEqual([
         '11111111-1111-4111-8111-111111111111',
         '22222222-2222-4222-8222-222222222222',
       ]);
-      return jsonResponse({ evidence_items: [{ file_path: 'src/context/pack.ts' }] });
+      expect(body).toMatchObject({
+        evidence_limit: 4,
+        token_budget: 3000,
+        include_tests: false,
+        include_graph: false,
+        enable_sufficiency_gate: false,
+      });
+      return jsonResponse({ evidence_items: [{ file_path: 'src/context/pack.ts', stream_hits: ['fts'] }] });
     });
     const kfdb = new KfdbKnowledgeClient({
       baseUrl: 'https://kfdb.test',
@@ -145,7 +152,7 @@ describe('KFDB read/write auth split', () => {
       task: 'Find the shared graph contracts.',
       repo: 'rickycambrian/rickydata_home, rickycambrian/rickydata_product_research',
     })).resolves.toMatchObject({
-      evidence_items: [{ file_path: 'src/context/pack.ts' }],
+      evidence_items: [{ file_path: 'src/context/pack.ts', stream_hits: ['fts'] }],
       repo_resolution: {
         status: 'resolved',
         resolved: [
@@ -155,6 +162,46 @@ describe('KFDB read/write auth split', () => {
       },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops graph-only code evidence that cannot prove repository scope', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+      if (String(url).endsWith('/api/v1/import/github')) {
+        return jsonResponse({
+          repositories: [{
+            repo_id: '11111111-1111-4111-8111-111111111111',
+            owner: 'rickycambrian',
+            name: 'rickydata_home',
+            full_name: 'rickycambrian/rickydata_home',
+          }],
+        });
+      }
+      return jsonResponse({
+        evidence_items: [
+          { node_id: 'scoped', file_path: 'src/kfdb/project.ts', stream_hits: ['symbol', 'graph'] },
+          { node_id: 'graph-only', file_path: 'vendor/unrelated.ts', stream_hits: ['graph'] },
+        ],
+        diagnostics: { evidence_count: 2 },
+      });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.codeContext({
+      task: 'Find the Project schema.',
+      repo: 'rickycambrian/rickydata_home',
+    })).resolves.toMatchObject({
+      evidence_items: [{ node_id: 'scoped' }],
+      diagnostics: {
+        evidence_count: 1,
+        repo_scope_graph_only_dropped: 1,
+      },
+    });
   });
 
   it('returns an honest diagnostic instead of broad code results for an unindexed repo', async () => {
