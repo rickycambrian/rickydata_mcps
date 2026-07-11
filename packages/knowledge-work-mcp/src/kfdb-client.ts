@@ -104,6 +104,57 @@ const BLOCKING_BASELINE = 0.2;
 const TRANSIENT_READ_STATUSES = new Set([429, 502, 503, 504]);
 const TRANSIENT_READ_RETRY_DELAY_MS = 250;
 
+function missingCompoundIdentifierQueries(task: string, result: unknown): string[] {
+  const resultText = JSON.stringify(result).toLowerCase();
+  const identifiers = task.match(/\b[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+\b/g) ?? [];
+  return [...new Set(identifiers)]
+    .filter((identifier) => !resultText.includes(identifier.toLowerCase()))
+    .map((identifier) => `${identifier} schema contract`);
+}
+
+function codeEvidenceKey(item: unknown): string {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return JSON.stringify(item);
+  const value = item as Record<string, unknown>;
+  return String(value['node_id'] ?? `${value['file_path'] ?? ''}:${value['name'] ?? ''}:${value['start_line'] ?? ''}`);
+}
+
+function mergeCodeContextResults(primary: unknown, supplements: unknown[], queries: string[]): unknown {
+  if (!primary || typeof primary !== 'object' || Array.isArray(primary)) return primary;
+  const value = primary as Record<string, unknown>;
+  const evidence = [primary, ...supplements].flatMap((result) => {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return [];
+    const items = (result as Record<string, unknown>)['evidence_items'];
+    return Array.isArray(items) ? items : [];
+  });
+  const seen = new Set<string>();
+  const mergedEvidence = evidence.filter((item) => {
+    const key = codeEvidenceKey(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const primaryDiagnostics = value['diagnostics'] && typeof value['diagnostics'] === 'object'
+    ? value['diagnostics'] as Record<string, unknown>
+    : {};
+  const totalMs = [primary, ...supplements].reduce<number>((sum, result) => {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return sum;
+    const diagnostics = (result as Record<string, unknown>)['diagnostics'];
+    if (!diagnostics || typeof diagnostics !== 'object' || Array.isArray(diagnostics)) return sum;
+    const duration = (diagnostics as Record<string, unknown>)['total_ms'];
+    return sum + (typeof duration === 'number' ? duration : 0);
+  }, 0);
+  return {
+    ...value,
+    evidence_items: mergedEvidence,
+    diagnostics: {
+      ...primaryDiagnostics,
+      evidence_count: mergedEvidence.length,
+      query_expansions: queries,
+      ...(totalMs > 0 ? { total_ms: totalMs } : {}),
+    },
+  };
+}
+
 const COMPLIMENT_CUES = [
   'do you like',
   'do you love',
@@ -872,12 +923,23 @@ export class KfdbKnowledgeClient {
       }
       body['repo_scope'] = (repoResolution['resolved'] as Array<{ repo_id: string }>).map((item) => item.repo_id);
     }
-    const result = await this.postJson<unknown>(
+    let result = await this.postJson<unknown>(
       '/api/v1/agent/context',
       body,
       await this.headersWithOptionalS2D(),
       true,
     );
+    const focusedQueries = missingCompoundIdentifierQueries(params.task, result);
+    if (focusedQueries.length > 0) {
+      const headers = await this.headersWithOptionalS2D();
+      const supplements = await Promise.all(focusedQueries.map((query) => this.postJson<unknown>(
+        '/api/v1/agent/context',
+        { ...body, query },
+        headers,
+        true,
+      )));
+      result = mergeCodeContextResults(result, supplements, focusedQueries);
+    }
     if (!repoResolution) return result;
     if (result && typeof result === 'object' && !Array.isArray(result)) {
       const value = result as Record<string, unknown>;

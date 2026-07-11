@@ -216,6 +216,62 @@ describe('KFDB read/write auth split', () => {
     });
   });
 
+  it('supplements broad code context with focused compound-identifier evidence', async () => {
+    const queries: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as Record<string, unknown>;
+      queries.push(String(body.query));
+      if (body.query === 'ProductProfile schema contract') {
+        return jsonResponse({
+          evidence_items: [{
+            node_id: 'product-profile',
+            file_path: 'src/kfdb/product-profile.ts',
+            name: 'ProductProfile',
+            content: 'interface ProductProfile { productId: string; }',
+            stream_hits: ['symbol'],
+          }],
+          diagnostics: { total_ms: 12, evidence_count: 1 },
+        });
+      }
+      return jsonResponse({
+        evidence_items: [{
+          node_id: 'clarification',
+          file_path: 'src/queue/sources.ts',
+          name: 'clarificationItemId',
+          content: 'function clarificationItemId(projectId: string, index: number): string',
+          stream_hits: ['symbol'],
+        }],
+        diagnostics: { total_ms: 10, evidence_count: 1, token_budget: 3000 },
+      });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.codeContext({
+      task: 'Project ProductProfile Clarification',
+      repo: '11111111-1111-4111-8111-111111111111',
+    })).resolves.toMatchObject({
+      evidence_items: [
+        { node_id: 'clarification' },
+        { node_id: 'product-profile', name: 'ProductProfile' },
+      ],
+      diagnostics: {
+        evidence_count: 2,
+        query_expansions: ['ProductProfile schema contract'],
+        repo_scope_filter_applied: true,
+      },
+    });
+    expect(queries).toEqual([
+      'Project ProductProfile Clarification',
+      'ProductProfile schema contract',
+    ]);
+  });
+
   it('returns an honest diagnostic instead of broad code results for an unindexed repo', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ repositories: [] }));
     const kfdb = new KfdbKnowledgeClient({
