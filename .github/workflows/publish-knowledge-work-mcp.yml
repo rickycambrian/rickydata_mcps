@@ -133,16 +133,23 @@ jobs:
             const pkg='@rickydata/knowledge-work-mcp';
             const sourceRepository='https://github.com/rickycambrian/rickydata_mcps';
             const packageSubdir='packages/knowledge-work-mcp';
+            const requiredSecrets=[
+              {name:'S2D_SESSION_ID',description:'Pre-minted KFDB sign-to-derive session id (keyless delegation; preferred over KNOWLEDGE_MCP_PRIVATE_KEY).',required:true},
+              {name:'S2D_DERIVED_KEY',description:'Derived key hex for the pre-minted S2D session (paired with S2D_SESSION_ID).',required:true},
+              {name:'KFDB_WALLET_ADDRESS',description:'Wallet address for S2D derive headers.',required:true},
+              {name:'HOME_GATEWAY_JWT',description:'Long-lived agent-gateway ES256 token for rickydata_home (preferred over legacy scwt_ minting).',required:true}
+            ];
             const optionalSecrets=[
-              {name:'S2D_SESSION_ID',description:'Pre-minted KFDB sign-to-derive session id (keyless delegation; preferred over KNOWLEDGE_MCP_PRIVATE_KEY).',required:false},
-              {name:'S2D_DERIVED_KEY',description:'Derived key hex for the pre-minted S2D session (paired with S2D_SESSION_ID).',required:false},
               {name:'KNOWLEDGE_MCP_PRIVATE_KEY',description:'Legacy: wallet private key used to mint home scwt_ tokens and self-mint S2D derive sessions. Superseded by S2D_SESSION_ID/S2D_DERIVED_KEY.',required:false},
-              {name:'HOME_GATEWAY_JWT',description:'Long-lived agent-gateway ES256 token for rickydata_home (preferred over legacy scwt_ minting).',required:false},
-              {name:'KFDB_WALLET_ADDRESS',description:'Wallet address for S2D derive headers.',required:false},
               {name:'KFDB_API_KEY',description:'KFDB API key fallback for legacy deployments.',required:false},
               {name:'HOME_API_URL',description:'Home API URL override; defaults to https://rickydata-home-2dbp4scmrq-uc.a.run.app.',required:false},
               {name:'KFDB_API_URL',description:'KFDB API URL override; defaults to https://db.rickydata.org.',required:false}
             ];
+            const requiredEnvVars=registryType === 'git' ? requiredSecrets.map(({name})=>name) : [];
+            const declaredSecrets=registryType === 'git'
+              ? [...requiredSecrets,...optionalSecrets]
+              : [...requiredSecrets.map((secret)=>({...secret,required:false})),...optionalSecrets];
+            const secretsOptional=declaredSecrets.filter((secret)=>secret.required===false);
             const installCommand=registryType === 'npm'
               ? 'npx -y @rickydata/knowledge-work-mcp@'+v
               : 'git clone '+sourceRepository+' && cd rickydata_mcps/'+packageSubdir+' && npm install && npm run build';
@@ -171,10 +178,10 @@ jobs:
               security_risk:{String:'safe'},
               gateway_security_score:{Integer:85},
               gateway_risk_score:{Integer:15},
-              required_env_vars:{String:JSON.stringify([])},
-              secrets_required:{String:JSON.stringify(optionalSecrets)},
+              required_env_vars:{String:JSON.stringify(requiredEnvVars)},
+              secrets_required:{String:JSON.stringify(declaredSecrets)},
               required_credentials:{String:JSON.stringify([])},
-              secrets_optional:{String:JSON.stringify(optionalSecrets)},
+              secrets_optional:{String:JSON.stringify(secretsOptional)},
               external_services:{String:JSON.stringify(['rickydata'])},
               categories:{String:JSON.stringify(['Knowledge', 'Voice', 'RickyData'])},
               admin_hidden:{Boolean:false},

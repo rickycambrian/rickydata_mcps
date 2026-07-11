@@ -7,8 +7,22 @@ const workflow = readFileSync(
 );
 
 describe('knowledge-work-mcp publish workflow', () => {
-  it('declares the home gateway JWT as an optional injected secret', () => {
-    expect(workflow).toContain("{name:'HOME_GATEWAY_JWT'");
+  it('requires the four delegated credentials for source-backed registration', () => {
+    const expected = ['S2D_SESSION_ID', 'S2D_DERIVED_KEY', 'KFDB_WALLET_ADDRESS', 'HOME_GATEWAY_JWT'];
+    const requiredBlock = workflow.match(/const requiredSecrets=\[(.*?)\n            \];/s)?.[1] ?? '';
+    const requiredNames = [...requiredBlock.matchAll(/name:'([^']+)'/g)].map((match) => match[1]);
+    expect(requiredNames).toEqual(expected);
+    for (const name of expected) {
+      expect(workflow).toMatch(new RegExp(`name:'${name}'[^\\n]+required:true`));
+    }
+    expect(workflow).toContain("const requiredEnvVars=registryType === 'git' ? requiredSecrets.map");
+    expect(workflow).toContain('required_env_vars:{String:JSON.stringify(requiredEnvVars)}');
+    expect(workflow).toContain('secrets_required:{String:JSON.stringify(declaredSecrets)}');
+  });
+
+  it('keeps the legacy private key declared as an optional escape hatch', () => {
+    expect(workflow).toMatch(/name:'KNOWLEDGE_MCP_PRIVATE_KEY'[^\n]+required:false/);
+    expect(workflow).not.toMatch(/name:'KNOWLEDGE_MCP_PRIVATE_KEY'[^\n]+required:true/);
   });
 
   it('blocks source refresh completion until production exposes the exact commit and tool count', () => {
