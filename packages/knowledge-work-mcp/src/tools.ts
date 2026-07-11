@@ -304,16 +304,20 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
   server.tool(
     'knowledge_bundle',
-    'Query-focused Tier-1 compiled knowledge bundle from KFDB private wiki.',
+    'Voice-capped Tier-1 knowledge bundle. Summarize this result directly; never open engine tool-result files.',
     {
       query: z.string().describe('Focus query.'),
-      token_budget: z.number().int().min(200).max(32000).optional().default(2500),
-      page_limit: z.number().int().min(1).max(200).optional().default(40),
-      claim_limit: z.number().int().min(1).max(500).optional().default(120),
+      token_budget: z.number().int().min(200).max(4000).optional().default(2500),
+      page_limit: z.number().int().min(1).max(20).optional().default(15),
+      claim_limit: z.number().int().min(1).max(40).optional().default(30),
     },
     async ({ query, token_budget, page_limit, claim_limit }) => {
       try {
-        return ok(await requireKfdb(kfdb).knowledgeBundle({ query, token_budget, page_limit, claim_limit, include_questions: true }));
+        return ok(await requireKfdb(kfdb).knowledgeBundle({
+          query,
+          ...capKnowledgeBundleArgs({ token_budget, page_limit, claim_limit }),
+          include_questions: true,
+        }));
       } catch (err) {
         return fail(err);
       }
@@ -642,4 +646,16 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       }
     },
   );
+}
+
+export function capKnowledgeBundleArgs(args: {
+  token_budget: number;
+  page_limit: number;
+  claim_limit: number;
+}): { token_budget: number; page_limit: number; claim_limit: number } {
+  return {
+    token_budget: Math.min(args.token_budget, 4000),
+    page_limit: Math.min(args.page_limit, 20),
+    claim_limit: Math.min(args.claim_limit, 40),
+  };
 }

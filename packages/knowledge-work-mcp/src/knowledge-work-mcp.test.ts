@@ -4,7 +4,7 @@ import { ApiError, FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
-import { resolveNextQuestions, resolveReviewPending, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, withAssertionVoiceAnswer } from './tools.js';
+import { capKnowledgeBundleArgs, resolveNextQuestions, resolveReviewPending, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, withAssertionVoiceAnswer } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
@@ -56,6 +56,18 @@ describe('home auth fail-closed', () => {
 });
 
 describe('KFDB read/write auth split', () => {
+  it('caps broad knowledge bundles before they can spill into engine result files', () => {
+    expect(capKnowledgeBundleArgs({
+      token_budget: 32000,
+      page_limit: 200,
+      claim_limit: 500,
+    })).toEqual({
+      token_budget: 4000,
+      page_limit: 20,
+      claim_limit: 40,
+    });
+  });
+
   it('allows knowledge reads without S2D headers so KFDB can report honest diagnostics', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({
