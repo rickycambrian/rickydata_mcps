@@ -12,17 +12,20 @@ second-brain tool surface over KFDB and rickydata_home:
 
 | Env | Required | Purpose |
 | --- | --- | --- |
-| `KNOWLEDGE_MCP_PRIVATE_KEY` | Required for home tools and KFDB writes | Mints `scwt_` home auth tokens and sign-to-derive sessions. No key means home tools fail before network egress and capture tools refuse. |
+| `HOME_GATEWAY_JWT` | Preferred for home tools | Agent-gateway ES256 bearer for rickydata_home. Takes precedence over legacy `scwt_` minting. |
+| `KNOWLEDGE_MCP_PRIVATE_KEY` | Legacy fallback | Mints `scwt_` home auth tokens and sign-to-derive sessions when injected delegated credentials are absent. |
 | `HOME_API_URL` | Optional | rickydata_home base URL. Defaults to `https://rickydata-home-2dbp4scmrq-uc.a.run.app`. |
 | `KFDB_API_URL` | Required for KFDB tools | KFDB API base URL. |
 | `KFDB_API_KEY` | Required for KFDB tools | Bearer for KFDB API calls. |
+| `S2D_SESSION_ID` / `S2D_DERIVED_KEY` | Preferred for private KFDB data | Pre-minted, revocable sign-to-derive session credentials. Requires `KFDB_WALLET_ADDRESS`. |
 | `KFDB_WALLET_ADDRESS` | Optional | Wallet tenant header when no private key is available. With `KNOWLEDGE_MCP_PRIVATE_KEY`, the S2D wallet address is used. |
 | `RESPONSE_MAX_LENGTH` | Optional | Tool response cap, default `120000` chars. |
 
 ## Auth law
 
-- Home-backed tools mint a fresh `scwt_` token per call. Without
-  `KNOWLEDGE_MCP_PRIVATE_KEY`, they throw before fetch.
+- Home-backed tools prefer the injected `HOME_GATEWAY_JWT`. When it is absent,
+  they preserve the legacy behavior and mint a fresh `scwt_` token per call.
+  Without either credential, they throw before fetch.
 - KFDB read tools try S2D when possible. If S2D is absent or refresh fails, reads
   still call KFDB without derive headers so bundle diagnostics can honestly
   report `s2d_active:false` / `undecrypted_skipped`.

@@ -11,6 +11,48 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe('home auth fail-closed', () => {
+  it('uses an injected gateway JWT without requiring the legacy wallet signer', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ results: [] }));
+    const mintToken = vi.fn().mockRejectedValue(new Error('legacy mint must not run'));
+    const home = new HomeKnowledgeClient({
+      baseUrl: 'https://home.test',
+      signer: null,
+      gatewayJwt: 'gateway.jwt.token',
+      mintToken,
+      s2d: {
+        ensure: async () => ({ sessionId: 's2d-session', keyHex: 'a'.repeat(64), walletAddress: '0x1111111111111111111111111111111111111111' }),
+      },
+      fetchImpl,
+    });
+
+    await home.wikiSearch('hitl');
+
+    const init = fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect(init.headers).toMatchObject({ authorization: 'Bearer gateway.jwt.token' });
+    expect(mintToken).not.toHaveBeenCalled();
+  });
+
+  it('prefers the injected gateway JWT over legacy scwt_ minting when both are configured', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ results: [] }));
+    const mintToken = vi.fn().mockResolvedValue('scwt_legacy');
+    const home = new HomeKnowledgeClient({
+      baseUrl: 'https://home.test',
+      signer: { address: '0x1111111111111111111111111111111111111111', signMessage: async () => '0xsig' },
+      gatewayJwt: 'gateway.jwt.token',
+      mintToken,
+      s2d: {
+        ensure: async () => ({ sessionId: 's2d-session', keyHex: 'a'.repeat(64), walletAddress: '0x1111111111111111111111111111111111111111' }),
+      },
+      fetchImpl,
+    });
+
+    await home.wikiSearch('hitl');
+
+    const init = fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect(init.headers).toMatchObject({ authorization: 'Bearer gateway.jwt.token' });
+    expect(mintToken).not.toHaveBeenCalled();
+  });
+
   it('refuses home-backed tools before fetch when no signer is configured', async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const home = new HomeKnowledgeClient({ baseUrl: 'https://home.test', signer: null, fetchImpl });
@@ -33,7 +75,7 @@ describe('home auth fail-closed', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('adds S2D headers to home-backed requests', async () => {
+  it('falls back to legacy scwt_ minting and adds S2D headers', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ results: [] }));
     const home = new HomeKnowledgeClient({
       baseUrl: 'https://home.test',

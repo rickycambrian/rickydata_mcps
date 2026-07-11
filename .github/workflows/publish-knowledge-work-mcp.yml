@@ -137,6 +137,7 @@ jobs:
               {name:'S2D_SESSION_ID',description:'Pre-minted KFDB sign-to-derive session id (keyless delegation; preferred over KNOWLEDGE_MCP_PRIVATE_KEY).',required:false},
               {name:'S2D_DERIVED_KEY',description:'Derived key hex for the pre-minted S2D session (paired with S2D_SESSION_ID).',required:false},
               {name:'KNOWLEDGE_MCP_PRIVATE_KEY',description:'Legacy: wallet private key used to mint home scwt_ tokens and self-mint S2D derive sessions. Superseded by S2D_SESSION_ID/S2D_DERIVED_KEY.',required:false},
+              {name:'HOME_GATEWAY_JWT',description:'Long-lived agent-gateway ES256 token for rickydata_home (preferred over legacy scwt_ minting).',required:false},
               {name:'KFDB_WALLET_ADDRESS',description:'Wallet address for S2D derive headers.',required:false},
               {name:'KFDB_API_KEY',description:'KFDB API key fallback for legacy deployments.',required:false},
               {name:'HOME_API_URL',description:'Home API URL override; defaults to https://rickydata-home-2dbp4scmrq-uc.a.run.app.',required:false},

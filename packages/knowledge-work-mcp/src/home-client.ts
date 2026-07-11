@@ -10,6 +10,7 @@ import type { S2DProvider } from './s2d.js';
 export interface HomeClientDeps {
   baseUrl: string;
   signer: WalletSigner | null;
+  gatewayJwt?: string | null;
   s2d?: S2DProvider | null;
   fetchImpl?: typeof fetch;
   mintToken?: (opts: MintWalletTokenOptions) => Promise<string>;
@@ -42,6 +43,7 @@ type QueueItem = {
 export class HomeKnowledgeClient {
   private readonly baseUrl: string;
   private readonly signer: WalletSigner | null;
+  private readonly gatewayJwt: string | null;
   private readonly s2d: S2DProvider | null;
   private readonly fetchImpl: typeof fetch;
   private readonly mintToken: (opts: MintWalletTokenOptions) => Promise<string>;
@@ -51,6 +53,7 @@ export class HomeKnowledgeClient {
   constructor(deps: HomeClientDeps) {
     this.baseUrl = deps.baseUrl.replace(/\/$/, '');
     this.signer = deps.signer;
+    this.gatewayJwt = deps.gatewayJwt?.trim() || null;
     this.s2d = deps.s2d ?? null;
     this.fetchImpl = deps.fetchImpl ?? fetch;
     this.mintToken = deps.mintToken ?? defaultMintWalletToken;
@@ -60,13 +63,14 @@ export class HomeKnowledgeClient {
   private requireSigner(): WalletSigner {
     if (!this.signer) {
       throw new FailClosedError(
-        'No operator wallet context: set KNOWLEDGE_MCP_PRIVATE_KEY so the MCP can mint the scwt_ wallet token rickydata_home requires. Home-backed tools fail closed.',
+        'No Home authorization: set HOME_GATEWAY_JWT or KNOWLEDGE_MCP_PRIVATE_KEY so the MCP can authenticate to rickydata_home. Home-backed tools fail closed.',
       );
     }
     return this.signer;
   }
 
   private async authHeader(): Promise<string> {
+    if (this.gatewayJwt) return `Bearer ${this.gatewayJwt}`;
     const signer = this.requireSigner();
     const token = await this.mintToken({
       address: signer.address,

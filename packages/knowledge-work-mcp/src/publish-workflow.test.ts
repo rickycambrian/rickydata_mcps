@@ -7,6 +7,10 @@ const workflow = readFileSync(
 );
 
 describe('knowledge-work-mcp publish workflow', () => {
+  it('declares the home gateway JWT as an optional injected secret', () => {
+    expect(workflow).toContain("{name:'HOME_GATEWAY_JWT'");
+  });
+
   it('blocks source refresh completion until production exposes the exact commit and tool count', () => {
     expect(workflow).toContain('Verify production source commit');
     expect(workflow).toContain('lastEnrichedCommitSha');

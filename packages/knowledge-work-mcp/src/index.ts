@@ -17,9 +17,11 @@ const env = process.env;
 const signer = loadSignerFromEnv(env);
 const kfdbApiUrl = env.KFDB_API_URL?.trim() || 'https://db.rickydata.org';
 const s2d = loadS2DProviderFromEnv(env, kfdbApiUrl);
+const homeGatewayJwt = env.HOME_GATEWAY_JWT?.trim() || null;
 const home = new HomeKnowledgeClient({
   baseUrl: env.HOME_API_URL?.trim() || 'https://rickydata-home-2dbp4scmrq-uc.a.run.app',
   signer,
+  gatewayJwt: homeGatewayJwt,
   s2d,
 });
 const kfdb = loadKfdbClientFromEnv({ ...env, KFDB_API_URL: kfdbApiUrl }, s2d);
@@ -47,7 +49,8 @@ async function main() {
       res.json({
         status: 'ok',
         server: 'knowledge-work-mcp',
-        home_configured: Boolean(signer),
+        home_configured: Boolean(homeGatewayJwt || signer),
+        home_auth_mode: homeGatewayJwt ? 'gateway-jwt' : signer ? 'wallet-key' : null,
         kfdb_configured: Boolean(kfdb),
         s2d_configured: Boolean(s2d),
         s2d_mode: s2d ? (s2d instanceof StaticS2DProvider ? 'static-session' : 'wallet-key') : null,
