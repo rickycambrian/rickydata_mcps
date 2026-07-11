@@ -6,7 +6,7 @@ import { registerTools } from './tools.js';
 import { loadSignerFromEnv } from './wallet-token.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { loadKfdbClientFromEnv } from './kfdb-client.js';
-import { S2DSessionManager } from './s2d.js';
+import { loadS2DProviderFromEnv, StaticS2DProvider } from './s2d.js';
 
 const server = new McpServer({
   name: 'knowledge-work-mcp',
@@ -16,10 +16,7 @@ const server = new McpServer({
 const env = process.env;
 const signer = loadSignerFromEnv(env);
 const kfdbApiUrl = env.KFDB_API_URL?.trim() || 'https://db.rickydata.org';
-const s2d =
-  kfdbApiUrl && env.KNOWLEDGE_MCP_PRIVATE_KEY?.trim()
-    ? new S2DSessionManager(kfdbApiUrl, env.KNOWLEDGE_MCP_PRIVATE_KEY.trim())
-    : null;
+const s2d = loadS2DProviderFromEnv(env, kfdbApiUrl);
 const home = new HomeKnowledgeClient({
   baseUrl: env.HOME_API_URL?.trim() || 'https://rickydata-home-2dbp4scmrq-uc.a.run.app',
   signer,
@@ -53,6 +50,7 @@ async function main() {
         home_configured: Boolean(signer),
         kfdb_configured: Boolean(kfdb),
         s2d_configured: Boolean(s2d),
+        s2d_mode: s2d ? (s2d instanceof StaticS2DProvider ? 'static-session' : 'wallet-key') : null,
       });
     });
 

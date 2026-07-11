@@ -2,6 +2,23 @@ import { ApiError, FailClosedError } from './errors.js';
 import type { S2DProvider } from './s2d.js';
 import type { WriteRequest } from './atoms.js';
 
+/**
+ * When KFDB rejects a request because the sign-to-derive session is invalid
+ * (revoked or expired), rewrite the error into actionable guidance: the fix
+ * is reconnecting on the agent page, not retrying.
+ */
+export function decorateS2DRejection(error: ApiError): ApiError {
+  const isAuthStatus = error.status === 401 || error.status === 403;
+  if (!isAuthStatus || !/sign-to-derive|derive session/i.test(error.body)) return error;
+  return new ApiError(
+    error.service,
+    error.status,
+    error.body,
+    `s2d_unavailable: the sign-to-derive session was rejected by KFDB (revoked or expired). ` +
+      `Reconnect your second brain on the agent page to mint a new session. Original: ${error.body.slice(0, 200)}`,
+  );
+}
+
 export interface KfdbClientDeps {
   baseUrl: string;
   apiKey: string;
@@ -481,7 +498,7 @@ export class KfdbKnowledgeClient {
           ...init,
         });
         const text = await res.text();
-        if (!res.ok) throw new ApiError('kfdb', res.status, text);
+        if (!res.ok) throw decorateS2DRejection(new ApiError('kfdb', res.status, text));
         return text ? (JSON.parse(text) as T) : ({} as T);
       } catch (error) {
         const retryable = error instanceof ApiError

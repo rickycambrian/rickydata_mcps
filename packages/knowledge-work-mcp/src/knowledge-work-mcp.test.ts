@@ -960,3 +960,133 @@ describe('operator lane', () => {
     ]);
   });
 });
+
+describe('static S2D provider (keyless delegation)', () => {
+  it('returns injected credentials without any network or key material', async () => {
+    const { StaticS2DProvider } = await import('./s2d.js');
+    const provider = new StaticS2DProvider(
+      'session-abc',
+      '0x' + 'a'.repeat(64),
+      '0xABCDEF1234567890abcdef1234567890ABCDEF12',
+    );
+    const creds = await provider.ensure();
+    expect(creds).toEqual({
+      sessionId: 'session-abc',
+      keyHex: 'a'.repeat(64), // 0x prefix stripped for X-Derive-Key header
+      walletAddress: '0xabcdef1234567890abcdef1234567890abcdef12', // lowercased
+    });
+  });
+
+  it('prefers static session env over the legacy private key', async () => {
+    const { loadS2DProviderFromEnv, StaticS2DProvider } = await import('./s2d.js');
+    const provider = loadS2DProviderFromEnv(
+      {
+        S2D_SESSION_ID: 'session-abc',
+        S2D_DERIVED_KEY: 'b'.repeat(64),
+        KFDB_WALLET_ADDRESS: '0x1111111111111111111111111111111111111111',
+        KNOWLEDGE_MCP_PRIVATE_KEY: '59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
+      },
+      'https://db.test',
+    );
+    expect(provider).toBeInstanceOf(StaticS2DProvider);
+  });
+
+  it('falls back to the key-based manager when static env is incomplete', async () => {
+    const { loadS2DProviderFromEnv, S2DSessionManager, StaticS2DProvider } = await import('./s2d.js');
+    const provider = loadS2DProviderFromEnv(
+      {
+        S2D_SESSION_ID: 'session-abc', // key + wallet missing → not enough
+        KNOWLEDGE_MCP_PRIVATE_KEY: '59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
+      },
+      'https://db.test',
+    );
+    expect(provider).toBeInstanceOf(S2DSessionManager);
+    expect(provider).not.toBeInstanceOf(StaticS2DProvider);
+  });
+
+  it('returns null when neither credential style is configured', async () => {
+    const { loadS2DProviderFromEnv } = await import('./s2d.js');
+    expect(loadS2DProviderFromEnv({}, 'https://db.test')).toBeNull();
+  });
+
+  it('kfdb client sends static session credentials as X-Derive headers', async () => {
+    const { StaticS2DProvider } = await import('./s2d.js');
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ pages: [] }));
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://db.test',
+      apiKey: 'k',
+      s2d: new StaticS2DProvider('session-abc', 'c'.repeat(64), '0x2222222222222222222222222222222222222222'),
+      fetchImpl,
+    });
+    await kfdb.knowledgeBundle({ query: 'test' });
+    const headers = fetchImpl.mock.calls[0][1]?.headers as Record<string, string>;
+    expect(headers['x-derive-session-id']).toBe('session-abc');
+    expect(headers['x-derive-key']).toBe('c'.repeat(64));
+    expect(headers['x-wallet-address']).toBe('0x2222222222222222222222222222222222222222');
+  });
+});
+
+describe('revoked/expired S2D session guidance', () => {
+  it('rewrites KFDB 403 sign-to-derive rejections into reconnect guidance', async () => {
+    const { StaticS2DProvider } = await import('./s2d.js');
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response('Invalid sign-to-derive session: Derive session not found or expired', { status: 403 }),
+    );
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://db.test',
+      apiKey: 'k',
+      s2d: new StaticS2DProvider('revoked-session', 'd'.repeat(64), '0x3333333333333333333333333333333333333333'),
+      fetchImpl,
+    });
+    await expect(kfdb.knowledgeBundle({ query: 'x' })).rejects.toThrow(/s2d_unavailable.*Reconnect your second brain/is);
+  });
+
+  it('leaves unrelated 403s untouched', async () => {
+    const { decorateS2DRejection } = await import('./kfdb-client.js');
+    const original = new ApiError('kfdb', 403, 'Forbidden: wrong tenant');
+    expect(decorateS2DRejection(original)).toBe(original);
+    const serverError = new ApiError('kfdb', 500, 'sign-to-derive exploded');
+    expect(decorateS2DRejection(serverError)).toBe(serverError);
+  });
+});
+
+describe('self-minting S2D label', () => {
+  it('passes the label through to derive-key when configured', async () => {
+    const { S2DSessionManager } = await import('./s2d.js');
+    const calls: Array<{ url: string; body?: string }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), body: init?.body ? String(init.body) : undefined });
+      if (String(url).includes('derive-challenge')) {
+        return jsonResponse({
+          challenge_id: 'ch-1',
+          typed_data: {
+            domain: { name: 'KnowledgeFlowDB', version: '1', chainId: 1 },
+            types: { AuthMessage: [
+              { name: 'message', type: 'string' },
+              { name: 'nonce', type: 'string' },
+              { name: 'issuedAt', type: 'uint256' },
+              { name: 'expiresAt', type: 'uint256' },
+            ] },
+            message: { message: 'derive', nonce: 'n1', issuedAt: 1, expiresAt: 9999999999 },
+          },
+        });
+      }
+      return jsonResponse({ session_id: 's1', key_hex: 'e'.repeat(64) });
+    };
+    const globalFetch = globalThis.fetch;
+    globalThis.fetch = fetchImpl;
+    try {
+      const manager = new S2DSessionManager(
+        'https://db.test',
+        '59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
+        'agent:rickydata-knowledge-partner',
+      );
+      const creds = await manager.ensure();
+      expect(creds?.sessionId).toBe('s1');
+      const deriveCall = calls.find((c) => c.url.includes('derive-key'));
+      expect(deriveCall?.body).toContain('"label":"agent:rickydata-knowledge-partner"');
+    } finally {
+      globalThis.fetch = globalFetch;
+    }
+  });
+});

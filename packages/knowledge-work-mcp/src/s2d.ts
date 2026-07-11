@@ -11,17 +11,69 @@ export interface S2DProvider {
   ensure(): Promise<S2DCredentials | null>;
 }
 
+/**
+ * Static provider backed by an injected, pre-minted KFDB derive session
+ * (S2D_SESSION_ID / S2D_DERIVED_KEY / KFDB_WALLET_ADDRESS env vars).
+ *
+ * Holds NO private key. The session is minted by the user in the browser
+ * ("Connect your second brain") and delivered via the MCP gateway vault.
+ * Sessions live up to 365 days and are revocable server-side; rotation is
+ * re-running the connect flow (new env at next container spawn).
+ */
+export class StaticS2DProvider implements S2DProvider {
+  private readonly creds: S2DCredentials;
+
+  constructor(sessionId: string, keyHex: string, walletAddress: string) {
+    const key = keyHex.startsWith('0x') ? keyHex.slice(2) : keyHex;
+    this.creds = {
+      sessionId,
+      keyHex: key,
+      walletAddress: walletAddress.toLowerCase(),
+    };
+  }
+
+  async ensure(): Promise<S2DCredentials | null> {
+    return this.creds;
+  }
+}
+
+/**
+ * Resolve the S2D provider from environment, preferring the keyless static
+ * credential over the legacy raw-private-key path:
+ * 1. `S2D_SESSION_ID` + `S2D_DERIVED_KEY` + `KFDB_WALLET_ADDRESS` → StaticS2DProvider
+ * 2. `KNOWLEDGE_MCP_PRIVATE_KEY` → S2DSessionManager (self-minting, legacy)
+ * 3. neither → null (reads degrade, writes fail closed)
+ */
+export function loadS2DProviderFromEnv(
+  env: Record<string, string | undefined>,
+  kfdbApiUrl: string,
+): S2DProvider | null {
+  const sessionId = env.S2D_SESSION_ID?.trim();
+  const keyHex = env.S2D_DERIVED_KEY?.trim();
+  const walletAddress = env.KFDB_WALLET_ADDRESS?.trim();
+  if (sessionId && keyHex && walletAddress) {
+    return new StaticS2DProvider(sessionId, keyHex, walletAddress);
+  }
+  const privateKey = env.KNOWLEDGE_MCP_PRIVATE_KEY?.trim();
+  if (kfdbApiUrl && privateKey) {
+    return new S2DSessionManager(kfdbApiUrl, privateKey, env.S2D_SESSION_LABEL?.trim() || undefined);
+  }
+  return null;
+}
+
 export class S2DSessionManager implements S2DProvider {
   private readonly apiUrl: string;
   private readonly wallet: Wallet;
+  private readonly label: string | undefined;
   private current: S2DCredentials | null = null;
   private expiresAt = 0;
   private refreshPromise: Promise<S2DCredentials | null> | null = null;
 
-  constructor(apiUrl: string, privateKeyHex: string) {
+  constructor(apiUrl: string, privateKeyHex: string, label?: string) {
     this.apiUrl = apiUrl.replace(/\/$/, '');
     const key = privateKeyHex.startsWith('0x') ? privateKeyHex : `0x${privateKeyHex}`;
     this.wallet = new Wallet(key);
+    this.label = label;
   }
 
   async ensure(): Promise<S2DCredentials | null> {
@@ -72,6 +124,7 @@ export class S2DSessionManager implements S2DProvider {
         challenge_id: challenge.challenge_id,
         signature,
         address: this.wallet.address,
+        ...(this.label ? { label: this.label } : {}),
       }),
     });
     if (!deriveRes.ok) {
