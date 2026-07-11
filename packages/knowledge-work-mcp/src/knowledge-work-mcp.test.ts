@@ -874,6 +874,7 @@ describe('trace fallback detection', () => {
     expect(shouldPreferKfdbTrace('knowledge-assertion', 'zero-schema-law')).toBe(true);
     expect(shouldPreferKfdbTrace('anything', 'evidence:akc:build:abc')).toBe(true);
     expect(shouldPreferKfdbTrace('anything', 'roadmap:akc-p10')).toBe(true);
+    expect(shouldPreferKfdbTrace('wiki-page', 'b53bcdec-0c17-5ce6-96ef-146361649858')).toBe(true);
     expect(shouldPreferKfdbTrace('wiki-page', 'agentic-knowledge-compiler')).toBe(false);
   });
 });

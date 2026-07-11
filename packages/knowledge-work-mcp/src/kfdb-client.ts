@@ -641,7 +641,9 @@ export class KfdbKnowledgeClient {
       }) as Promise<KnowledgeBundle>,
     ]);
 
-    const page = pageRows.map(wikiPageOf).find((p): p is WikiPageRow => p !== null && p.slug === target);
+    const page = pageRows.map(wikiPageOf).find(
+      (p): p is WikiPageRow => p !== null && (p.slug === target || p.nodeId === target),
+    );
     if (!page) throw new ApiError('kfdb', 404, `wiki page not found: ${target}`);
 
     const verifiedById = new Map<string, boolean>();
@@ -653,7 +655,7 @@ export class KfdbKnowledgeClient {
 
     const claims = claimRows
       .map(wikiClaimOf)
-      .filter((claim): claim is WikiClaimRow => claim !== null && claim.pageSlug === target && claim.status !== 'retracted')
+      .filter((claim): claim is WikiClaimRow => claim !== null && claim.pageSlug === page.slug && claim.status !== 'retracted')
       .map((claim) => ({
         ...claim,
         verified: verifiedById.get(claim.id) === true,

@@ -250,7 +250,11 @@ export function shouldUseKfdbTraceFallback(trace: unknown): boolean {
 export function shouldPreferKfdbTrace(kind: string, id: string): boolean {
   const traceKind = kind.trim().toLowerCase();
   const target = id.trim().toLowerCase();
-  return ['wiki-claim', 'wikiclaim', 'knowledge-assertion', 'assertion'].includes(traceKind) || /^(evidence|roadmap):/.test(target);
+  const wikiPageUuid = ['wiki-page', 'wikipage', 'page'].includes(traceKind)
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(target);
+  return wikiPageUuid
+    || ['wiki-claim', 'wikiclaim', 'knowledge-assertion', 'assertion'].includes(traceKind)
+    || /^(evidence|roadmap):/.test(target);
 }
 
 export function withAssertionVoiceAnswer(kind: string, id: string, trace: unknown): unknown {
