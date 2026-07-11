@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildDiscoveryCapture, buildOpenQuestionCapture } from './atoms.js';
-import { FailClosedError } from './errors.js';
+import { ApiError, FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
@@ -82,6 +82,30 @@ describe('KFDB read/write auth split', () => {
     expect(init.headers).not.toHaveProperty('x-derive-session-id');
   });
 
+  it('retries one transient KFDB read failure', async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ error: 'temporary' }, { status: 502 }))
+      .mockResolvedValueOnce(jsonResponse({
+        pages: [],
+        claims: [],
+        open_questions: [],
+        reproducibility_hash: 'recovered',
+        diagnostics: { s2d_active: true },
+      }));
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.knowledgeBundle({ token_budget: 2500 })).resolves.toMatchObject({
+      reproducibility_hash: 'recovered',
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it('refuses capture writes before fetch when S2D is unavailable', async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const kfdb = new KfdbKnowledgeClient({
@@ -118,6 +142,25 @@ describe('KFDB read/write auth split', () => {
       'x-derive-session-id': 's2d-session',
       'x-derive-key': 'abc123',
     });
+  });
+
+  it('does not retry capture writes after a transient KFDB failure', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({ error: 'temporary' }, { status: 502 }),
+    );
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: {
+        ensure: async () => ({ sessionId: 's2d-session', keyHex: 'abc123', walletAddress: '0xb3e6' }),
+      },
+      fetchImpl,
+    });
+
+    await expect(kfdb.writeData(buildDiscoveryCapture({ idea: 'Keep writes fail-closed.' })))
+      .rejects.toBeInstanceOf(ApiError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('maps direct KFDB knowledge bundle pages into wiki search hits', async () => {

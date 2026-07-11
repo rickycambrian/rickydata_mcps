@@ -84,6 +84,8 @@ const QUESTION_ROT_DAYS = 14;
 const BLOCKING_IN_PROGRESS = 1.0;
 const BLOCKING_NEXT = 0.7;
 const BLOCKING_BASELINE = 0.2;
+const TRANSIENT_READ_STATUSES = new Set([429, 502, 503, 504]);
+const TRANSIENT_READ_RETRY_DELAY_MS = 250;
 
 const COMPLIMENT_CUES = [
   'do you like',
@@ -467,15 +469,32 @@ export class KfdbKnowledgeClient {
     };
   }
 
-  private async postJson<T>(path: string, body: unknown, headers: Record<string, string>): Promise<T> {
-    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
-    const text = await res.text();
-    if (!res.ok) throw new ApiError('kfdb', res.status, text);
-    return text ? (JSON.parse(text) as T) : ({} as T);
+  private async postJson<T>(
+    path: string,
+    body: unknown,
+    headers: Record<string, string>,
+    retryTransientRead = false,
+  ): Promise<T> {
+    const attempts = retryTransientRead ? 2 : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        });
+        const text = await res.text();
+        if (!res.ok) throw new ApiError('kfdb', res.status, text);
+        return text ? (JSON.parse(text) as T) : ({} as T);
+      } catch (error) {
+        const retryable = error instanceof ApiError
+          ? TRANSIENT_READ_STATUSES.has(error.status)
+          : error instanceof TypeError;
+        if (!retryTransientRead || !retryable || attempt === attempts - 1) throw error;
+        await new Promise((resolve) => setTimeout(resolve, TRANSIENT_READ_RETRY_DELAY_MS));
+      }
+    }
+    throw new Error('unreachable KFDB request state');
   }
 
   async knowledgeBundle(params: {
@@ -486,11 +505,11 @@ export class KfdbKnowledgeClient {
     include_questions?: boolean;
     question_limit?: number;
   }): Promise<unknown> {
-    return this.postJson('/api/v1/agent/knowledge', params, await this.headersWithOptionalS2D());
+    return this.postJson('/api/v1/agent/knowledge', params, await this.headersWithOptionalS2D(), true);
   }
 
   private async queryKql(query: string): Promise<Record<string, unknown>[]> {
-    const res = await this.postJson('/api/v1/query', { query }, await this.headersWithOptionalS2D());
+    const res = await this.postJson('/api/v1/query', { query }, await this.headersWithOptionalS2D(), true);
     return rowsOf(res);
   }
 
@@ -772,7 +791,7 @@ export class KfdbKnowledgeClient {
           threshold: input.minSimilarity,
         };
         try {
-          return { label, ok: true, result: await this.postJson('/api/v1/semantic/search', body, headers) };
+          return { label, ok: true, result: await this.postJson('/api/v1/semantic/search', body, headers, true) };
         } catch (err) {
           return { label, ok: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -790,7 +809,7 @@ export class KfdbKnowledgeClient {
       evidence_limit: 10,
     };
     if (params.repo?.trim()) body['repo_scope'] = [params.repo.trim()];
-    return this.postJson('/api/v1/agent/context', body, await this.headersWithOptionalS2D());
+    return this.postJson('/api/v1/agent/context', body, await this.headersWithOptionalS2D(), true);
   }
 
   async writeData(request: WriteRequest): Promise<unknown> {
