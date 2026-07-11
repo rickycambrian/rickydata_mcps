@@ -468,7 +468,9 @@ describe('KFDB read/write auth split', () => {
       }
       return jsonResponse({
         pages: [],
-        claims: [{ id: 'claim:target', page_slug: 'agentic-knowledge-compiler', verified: true }],
+        claims: body.query === 'Phase 10 passed build gate in 1.93s.'
+          ? [{ id: 'claim:target', page_slug: 'agentic-knowledge-compiler', verified: true }]
+          : [],
         diagnostics: { s2d_active: true },
         reproducibility_hash: 'hash',
       });

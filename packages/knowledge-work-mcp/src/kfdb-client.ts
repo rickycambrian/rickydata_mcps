@@ -699,15 +699,25 @@ export class KfdbKnowledgeClient {
       .find((row): row is WikiClaimRow => row !== null && row.status !== 'retracted' && (row.id === target || row.sourceRef === target));
     if (!claim) throw new ApiError('kfdb', 404, `wiki claim trace not found: ${target}`);
 
-    const page = await this.wikiPage(claim.pageSlug) as {
+    const [page, exactBundle] = await Promise.all([
+      this.wikiPage(claim.pageSlug),
+      this.knowledgeBundle({
+        query: claim.text,
+        token_budget: 2500,
+        page_limit: 10,
+        claim_limit: 40,
+        include_questions: false,
+      }),
+    ]) as [{
       page?: Record<string, unknown>;
       claims?: Array<Record<string, unknown>>;
       verifiedClaimIds?: string[];
       fallback?: Record<string, unknown>;
-    };
+    }, KnowledgeBundle];
     const exactClaim = page.claims?.find((row) => row['id'] === claim.id) ?? claim;
     const claimText = String((exactClaim as Record<string, unknown>)['text'] ?? claim.text);
-    const verified = Array.isArray(page.verifiedClaimIds) ? page.verifiedClaimIds.includes(claim.id) : Boolean((exactClaim as Record<string, unknown>)['verified']);
+    const verified = Array.isArray(exactBundle.claims) && exactBundle.claims.some((row) =>
+      row['id'] === claim.id && row['verified'] === true);
     const pageSlug = claim.pageSlug;
     const pageRecord = page.page ?? {};
     const compactPage = {
