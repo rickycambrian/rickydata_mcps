@@ -213,6 +213,26 @@ jobs:
             && echo "::notice::MCP gateway synced knowledge-work-mcp v${{ steps.ver.outputs.version }}" \
             || echo "::warning::gateway single-server sync failed (will pick up on next 10-min cycle)"
 
+      - name: Verify production source commit
+        if: inputs.refresh_source == true
+        timeout-minutes: 15
+        run: |
+          MCP_GW="${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}"
+          SERVER_ID="${{ steps.kfdb.outputs.node_id }}"
+          for attempt in $(seq 1 90); do
+            BODY=$(curl -fsS --max-time 30 "$MCP_GW/api/servers/$SERVER_ID" || true)
+            SHA=$(printf '%s' "$BODY" | jq -r '.lastEnrichedCommitSha // empty' 2>/dev/null || true)
+            COUNT=$(printf '%s' "$BODY" | jq -r '.toolsCount // 0' 2>/dev/null || true)
+            if [ "$SHA" = "${{ github.sha }}" ] && [ "$COUNT" -eq 15 ]; then
+              echo "::notice::Production exposes $SHA with $COUNT tools"
+              exit 0
+            fi
+            echo "Waiting for production source refresh (attempt $attempt/90, sha=${SHA:-missing}, tools=${COUNT:-0})"
+            sleep 10
+          done
+          echo "::error::Production did not expose ${{ github.sha }} with 15 tools"
+          exit 1
+
       - name: Commit version bump
         if: steps.publish.outcome == 'success' && inputs.skip_version_bump != true && inputs.refresh_source != true
         run: |
