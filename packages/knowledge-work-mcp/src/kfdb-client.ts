@@ -469,19 +469,16 @@ export class KfdbKnowledgeClient {
     };
   }
 
-  private async postJson<T>(
+  private async requestJson<T>(
     path: string,
-    body: unknown,
-    headers: Record<string, string>,
+    init: RequestInit,
     retryTransientRead = false,
   ): Promise<T> {
     const attempts = retryTransientRead ? 2 : 1;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
+          ...init,
         });
         const text = await res.text();
         if (!res.ok) throw new ApiError('kfdb', res.status, text);
@@ -495,6 +492,26 @@ export class KfdbKnowledgeClient {
       }
     }
     throw new Error('unreachable KFDB request state');
+  }
+
+  private async postJson<T>(
+    path: string,
+    body: unknown,
+    headers: Record<string, string>,
+    retryTransientRead = false,
+  ): Promise<T> {
+    return this.requestJson(path, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    }, retryTransientRead);
+  }
+
+  private async getJson<T>(
+    path: string,
+    headers: Record<string, string>,
+  ): Promise<T> {
+    return this.requestJson(path, { method: 'GET', headers }, true);
   }
 
   async knowledgeBundle(params: {
@@ -808,13 +825,131 @@ export class KfdbKnowledgeClient {
       include_graph: true,
       evidence_limit: 10,
     };
-    if (params.repo?.trim()) body['repo_scope'] = [params.repo.trim()];
-    return this.postJson('/api/v1/agent/context', body, await this.headersWithOptionalS2D(), true);
+    let repoResolution: Record<string, unknown> | null = null;
+    if (params.repo?.trim()) {
+      repoResolution = await this.resolveCodeRepoScope(params.repo);
+      if (repoResolution['status'] !== 'resolved') {
+        return {
+          evidence_items: [],
+          graph_neighborhood: [],
+          retrieval_metadata: {
+            sufficiency: {
+              is_sufficient: false,
+              reason: 'Requested repository scope is unavailable in the KFDB code index.',
+            },
+          },
+          diagnostics: { repo_scope_unavailable: true, evidence_count: 0 },
+          repo_resolution: repoResolution,
+        };
+      }
+      body['repo_scope'] = (repoResolution['resolved'] as Array<{ repo_id: string }>).map((item) => item.repo_id);
+    }
+    const result = await this.postJson<unknown>(
+      '/api/v1/agent/context',
+      body,
+      await this.headersWithOptionalS2D(),
+      true,
+    );
+    if (!repoResolution) return result;
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      return { ...(result as Record<string, unknown>), repo_resolution: repoResolution };
+    }
+    return { result, repo_resolution: repoResolution };
+  }
+
+  private async resolveCodeRepoScope(raw: string): Promise<Record<string, unknown>> {
+    const requested = [...new Set(raw.split(',').map((value) => value.trim()).filter(Boolean))];
+    if (requested.length === 0) {
+      return {
+        status: 'invalid',
+        requested,
+        resolved: [],
+        missing: [],
+        ambiguous: [],
+      };
+    }
+    const resolved: Array<{ repo: string; repo_id: string }> = [];
+    const missing: string[] = [];
+    const ambiguous: Array<{ repo: string; candidates: Array<{ repo: string; repo_id: string }> }> = [];
+    const unresolved = requested.filter((value) => !isUuid(value));
+    const repositories = unresolved.length > 0 ? await this.listImportedRepositories() : [];
+
+    for (const selector of requested) {
+      if (isUuid(selector)) {
+        resolved.push({ repo: selector, repo_id: selector.toLowerCase() });
+        continue;
+      }
+      const normalized = normalizeRepoSelector(selector);
+      const matches = repositories.filter((repo) => {
+        const fullName = normalizeRepoSelector(repo.full_name || `${repo.owner}/${repo.name}`);
+        const name = normalizeRepoSelector(repo.name);
+        return normalized.includes('/') ? fullName === normalized : name === normalized;
+      });
+      const unique = [...new Map(matches.map((repo) => [repo.repo_id, repo])).values()];
+      if (unique.length === 1) {
+        const match = unique[0]!;
+        resolved.push({ repo: match.full_name || `${match.owner}/${match.name}`, repo_id: match.repo_id });
+      } else if (unique.length === 0) {
+        missing.push(selector);
+      } else {
+        ambiguous.push({
+          repo: selector,
+          candidates: unique.map((repo) => ({
+            repo: repo.full_name || `${repo.owner}/${repo.name}`,
+            repo_id: repo.repo_id,
+          })),
+        });
+      }
+    }
+
+    return {
+      status: ambiguous.length > 0 ? 'ambiguous' : missing.length > 0 ? 'not_indexed' : 'resolved',
+      requested,
+      resolved,
+      missing,
+      ambiguous,
+    };
+  }
+
+  private async listImportedRepositories(): Promise<Array<{
+    repo_id: string;
+    owner: string;
+    name: string;
+    full_name: string;
+  }>> {
+    const result = await this.getJson<unknown>('/api/v1/import/github', await this.headersWithOptionalS2D());
+    if (!result || typeof result !== 'object') return [];
+    const repositories = (result as Record<string, unknown>)['repositories'];
+    if (!Array.isArray(repositories)) return [];
+    return repositories.flatMap((value) => {
+      if (!value || typeof value !== 'object') return [];
+      const repo = value as Record<string, unknown>;
+      const repoId = String(repo['repo_id'] ?? '').trim().toLowerCase();
+      const owner = String(repo['owner'] ?? '').trim();
+      const name = String(repo['name'] ?? '').trim();
+      const fullName = String(repo['full_name'] ?? '').trim();
+      if (!isUuid(repoId) || !name) return [];
+      return [{ repo_id: repoId, owner, name, full_name: fullName }];
+    });
   }
 
   async writeData(request: WriteRequest): Promise<unknown> {
     return this.postJson('/api/v1/write', request, await this.headersWithRequiredS2D());
   }
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim());
+}
+
+function normalizeRepoSelector(value: string): string {
+  return value
+    .trim()
+    .replace(/^https?:\/\/github\.com\//i, '')
+    .replace(/^github\.com\//i, '')
+    .replace(/\.git$/i, '')
+    .replace(/^\/+|\/+$/g, '')
+    .toLowerCase();
 }
 
 export function loadKfdbClientFromEnv(

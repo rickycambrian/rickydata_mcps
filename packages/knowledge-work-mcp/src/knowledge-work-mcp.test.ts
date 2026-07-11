@@ -106,6 +106,105 @@ describe('KFDB read/write auth split', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('resolves human repository names before requesting scoped code context', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
+      if (String(url).endsWith('/api/v1/import/github')) {
+        return jsonResponse({
+          repositories: [
+            {
+              repo_id: '11111111-1111-4111-8111-111111111111',
+              owner: 'rickycambrian',
+              name: 'rickydata_home',
+              full_name: 'rickycambrian/rickydata_home',
+            },
+            {
+              repo_id: '22222222-2222-4222-8222-222222222222',
+              owner: 'rickycambrian',
+              name: 'rickydata_product_research',
+              full_name: 'rickycambrian/rickydata_product_research',
+            },
+          ],
+        });
+      }
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as { repo_scope?: string[] };
+      expect(body.repo_scope).toEqual([
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+      ]);
+      return jsonResponse({ evidence_items: [{ file_path: 'src/context/pack.ts' }] });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.codeContext({
+      task: 'Find the shared graph contracts.',
+      repo: 'rickycambrian/rickydata_home, rickycambrian/rickydata_product_research',
+    })).resolves.toMatchObject({
+      evidence_items: [{ file_path: 'src/context/pack.ts' }],
+      repo_resolution: {
+        status: 'resolved',
+        resolved: [
+          { repo: 'rickycambrian/rickydata_home', repo_id: '11111111-1111-4111-8111-111111111111' },
+          { repo: 'rickycambrian/rickydata_product_research', repo_id: '22222222-2222-4222-8222-222222222222' },
+        ],
+      },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns an honest diagnostic instead of broad code results for an unindexed repo', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ repositories: [] }));
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.codeContext({
+      task: 'Find the Project schema.',
+      repo: 'rickycambrian/rickydata_home',
+    })).resolves.toMatchObject({
+      evidence_items: [],
+      diagnostics: { repo_scope_unavailable: true },
+      repo_resolution: {
+        status: 'not_indexed',
+        missing: ['rickycambrian/rickydata_home'],
+      },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an empty repository selector instead of issuing an unscoped code query', async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.codeContext({
+      task: 'Find the Project schema.',
+      repo: ', ,',
+    })).resolves.toMatchObject({
+      evidence_items: [],
+      diagnostics: { repo_scope_unavailable: true },
+      repo_resolution: {
+        status: 'invalid',
+        requested: [],
+      },
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('refuses capture writes before fetch when S2D is unavailable', async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const kfdb = new KfdbKnowledgeClient({

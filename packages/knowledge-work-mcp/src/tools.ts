@@ -404,7 +404,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     'KFDB code-evidence bundle for questions about how code works.',
     {
       task: z.string().describe('Code question or task.'),
-      repo: z.string().optional().describe('Optional repo UUID/scope accepted by KFDB get_context_bundle.'),
+      repo: z.string().optional().describe('Optional repo UUID, GitHub owner/name, or comma-separated list. Human names resolve against the KFDB imported-repository inventory; unavailable scopes return an honest diagnostic instead of broad results.'),
     },
     async ({ task, repo }) => {
       try {
