@@ -160,6 +160,105 @@ describe('KFDB read/write auth split', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('hydrates semantic hits into safe title, summary, and slug projections', async () => {
+    const longSummary = `Compiler overview ${'x'.repeat(240)}`;
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as Record<string, unknown>;
+      expect(body['include_entities']).toBe(true);
+      if (body['label'] === 'WikiPage') {
+        return jsonResponse({
+          results: [{
+            id: 'embedding-doc-page',
+            labels: ['WikiPage'],
+            similarity: 0.75,
+            properties: {
+              entity_label: 'WikiPage',
+              file_path: 'WikiPage://11111111-1111-4111-8111-111111111111',
+              repo_id: 'repo-home',
+            },
+            entity: {
+              _id: '11111111-1111-4111-8111-111111111111',
+              slug: 'agentic-knowledge-compiler',
+              title: 'The Agentic Knowledge Compiler',
+              summary: longSummary,
+              body_md: 'must not escape the safe projection',
+            },
+          }],
+          total_hits: 1,
+          took_ms: 12,
+        });
+      }
+      return jsonResponse({
+        results: [{
+          id: 'embedding-doc-question',
+          labels: ['OpenQuestion'],
+          similarity: 0.68,
+          properties: {
+            entity_label: 'OpenQuestion',
+            file_path: 'OpenQuestion://22222222-2222-4222-8222-222222222222',
+          },
+          entity: {
+            _id: '22222222-2222-4222-8222-222222222222',
+            question: 'Do coding sessions flow into private KFDB automatically?',
+            why_it_matters: 'This distinguishes an automatic loop from an operator-only workflow.',
+          },
+        }],
+        total_hits: 1,
+        took_ms: 9,
+      });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.semanticSearch({
+      query: 'automatic knowledge loop',
+      labels: ['WikiPage', 'OpenQuestion'],
+      minSimilarity: 0.45,
+      limit: 8,
+    })).resolves.toMatchObject({
+      labels: [
+        {
+          label: 'WikiPage',
+          ok: true,
+          result: {
+            results: [{
+              node_id: '11111111-1111-4111-8111-111111111111',
+              embedding_id: 'embedding-doc-page',
+              title: 'The Agentic Knowledge Compiler',
+              summary: longSummary.slice(0, 200),
+              slug: 'agentic-knowledge-compiler',
+            }],
+          },
+        },
+        {
+          label: 'OpenQuestion',
+          ok: true,
+          result: {
+            results: [{
+              node_id: '22222222-2222-4222-8222-222222222222',
+              embedding_id: 'embedding-doc-question',
+              title: 'Do coding sessions flow into private KFDB automatically?',
+              summary: 'This distinguishes an automatic loop from an operator-only workflow.',
+              slug: '22222222-2222-4222-8222-222222222222',
+            }],
+          },
+        },
+      ],
+    });
+    const serialized = JSON.stringify(await kfdb.semanticSearch({
+      query: 'automatic knowledge loop',
+      labels: ['WikiPage'],
+      minSimilarity: 0.45,
+      limit: 8,
+    }));
+    expect(serialized).not.toContain('must not escape the safe projection');
+  });
+
   it('resolves human repository names before requesting scoped code context', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
       if (String(url).endsWith('/api/v1/import/github')) {

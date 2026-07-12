@@ -243,6 +243,71 @@ function num(row: Record<string, unknown>, key: string): number {
   return typeof value === 'number' ? value : 0;
 }
 
+function firstString(row: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = unwrap(row[key]);
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function semanticNodeId(filePath: string, entity: Record<string, unknown>): string {
+  const entityId = firstString(entity, ['_id', 'id', 'node_id']);
+  if (entityId) return entityId;
+  const uriTarget = filePath.split('://')[1]?.split('/')[0]?.trim();
+  return uriTarget || '';
+}
+
+function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string, unknown> {
+  const value = hit && typeof hit === 'object' ? hit as Record<string, unknown> : {};
+  const properties = value['properties'] && typeof value['properties'] === 'object'
+    ? value['properties'] as Record<string, unknown>
+    : {};
+  const entity = value['entity'] && typeof value['entity'] === 'object'
+    ? value['entity'] as Record<string, unknown>
+    : {};
+  const filePath = firstString(properties, ['file_path']);
+  const entityLabel = firstString(properties, ['entity_label']) || requestedLabel;
+  const nodeId = semanticNodeId(filePath, entity);
+  const slug = firstString(entity, ['slug', 'page_slug', 'roadmap_slug']) || nodeId;
+  const sourceTitle = firstString(entity, ['title', 'name', 'question', 'summary', 'objective', 'decision']);
+  const sourceSummary = firstString(entity, [
+    'summary',
+    'why_it_matters',
+    'whyItMatters',
+    'description',
+    'objective',
+    'decision',
+    'answer',
+    'question',
+    'text',
+  ]);
+  const title = sourceTitle || `${entityLabel} ${slug || 'result'}`;
+  const summary = (sourceSummary || title).replace(/\s+/g, ' ').trim().slice(0, 200);
+  return {
+    node_id: nodeId,
+    embedding_id: typeof value['id'] === 'string' ? value['id'] : '',
+    entity_label: entityLabel,
+    file_path: filePath,
+    repo_id: firstString(properties, ['repo_id']),
+    labels: Array.isArray(value['labels']) ? value['labels'] : [entityLabel],
+    similarity: typeof value['similarity'] === 'number' ? value['similarity'] : 0,
+    title,
+    summary,
+    slug,
+    ...(sourceTitle || sourceSummary ? {} : { content_null: true }),
+  };
+}
+
+function projectSemanticResponse(response: unknown, requestedLabel: string): Record<string, unknown> {
+  const value = response && typeof response === 'object' ? response as Record<string, unknown> : {};
+  const results = Array.isArray(value['results']) ? value['results'] : [];
+  return {
+    ...value,
+    results: results.map((hit) => projectSemanticHit(hit, requestedLabel)),
+  };
+}
+
 function pendingWikiReviewItems(rows: Record<string, unknown>[]): PendingWikiReviewItem[] {
   const runs = rows
     .map(unwrapRow)
@@ -886,9 +951,11 @@ export class KfdbKnowledgeClient {
           label,
           limit: input.limit,
           threshold: input.minSimilarity,
+          include_entities: true,
         };
         try {
-          return { label, ok: true, result: await this.postJson('/api/v1/semantic/search', body, headers, true) };
+          const response = await this.postJson('/api/v1/semantic/search', body, headers, true);
+          return { label, ok: true, result: projectSemanticResponse(response, label) };
         } catch (err) {
           return { label, ok: false, error: err instanceof Error ? err.message : String(err) };
         }
