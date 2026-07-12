@@ -39,6 +39,59 @@ interface ReviewPendingReader {
   reviewPending(limit: number): Promise<unknown>;
 }
 
+interface TraceReader {
+  trace(kind: string, id: string): Promise<unknown>;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function readTraceWithin(
+  home: TraceReader,
+  kind: string,
+  id: string,
+  timeoutMs: number,
+): Promise<unknown> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      home.trace(kind, id),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`home trace route timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function routeUnavailableTrace(
+  kind: string,
+  id: string,
+  homeError: unknown,
+  payload?: unknown,
+  fallbackError?: unknown,
+): Record<string, unknown> {
+  const bestEffort = payload && typeof payload === 'object'
+    ? payload as Record<string, unknown>
+    : payload === undefined
+      ? {}
+      : { best_effort: payload };
+  return {
+    ...bestEffort,
+    ...(bestEffort['fallback'] !== undefined ? { fallback_detail: bestEffort['fallback'] } : {}),
+    status: 'route_unavailable',
+    fallback: 'kfdb_trace',
+    subject: { kind, id },
+    home_error: errorMessage(homeError),
+    ...(fallbackError !== undefined ? { fallback_error: errorMessage(fallbackError) } : {}),
+  };
+}
+
 export async function resolveNextQuestions(
   home: NextQuestionReader,
   kfdb: NextQuestionReader | null,
@@ -285,6 +338,79 @@ export function withAssertionVoiceAnswer(kind: string, id: string, trace: unknow
   return { ...value, answer };
 }
 
+/**
+ * Resolve a trace without ever rejecting the MCP tool call. The Home route is
+ * bounded below the gateway tool timeout; failures return an explicit KFDB
+ * fallback envelope, including the best payload available.
+ */
+export async function resolveTrace(
+  home: TraceReader,
+  kfdb: TraceReader | null,
+  kind: string,
+  id: string,
+  homeTimeoutMs = 5_000,
+): Promise<unknown> {
+  if (kfdb && shouldPreferKfdbTrace(kind, id)) {
+    try {
+      return withAssertionVoiceAnswer(kind, id, await kfdb.trace(kind, id));
+    } catch (kfdbError) {
+      try {
+        return {
+          ...(withAssertionVoiceAnswer(kind, id, await readTraceWithin(home, kind, id, homeTimeoutMs)) as Record<string, unknown>),
+          kfdb_trace_error: errorMessage(kfdbError),
+        };
+      } catch (homeError) {
+        return routeUnavailableTrace(kind, id, homeError, undefined, kfdbError);
+      }
+    }
+  }
+
+  try {
+    const homeTrace = withAssertionVoiceAnswer(kind, id, await readTraceWithin(home, kind, id, homeTimeoutMs));
+    if (!shouldUseKfdbTraceFallback(homeTrace)) return homeTrace;
+
+    const homeValue = homeTrace as Record<string, unknown>;
+    if (!kfdb) {
+      return routeUnavailableTrace(
+        kind,
+        id,
+        'home trace returned an unavailable partial result',
+        { best_effort: homeTrace },
+        'KFDB trace client is not configured',
+      );
+    }
+    try {
+      return routeUnavailableTrace(
+        kind,
+        id,
+        'home trace returned an unavailable partial result',
+        {
+          ...(await kfdb.trace(kind, id) as Record<string, unknown>),
+          home_trace_confidence: homeValue['confidence'],
+          home_trace_omissions: homeValue['omissions'],
+        },
+      );
+    } catch (fallbackError) {
+      return routeUnavailableTrace(
+        kind,
+        id,
+        'home trace returned an unavailable partial result',
+        { best_effort: homeTrace },
+        fallbackError,
+      );
+    }
+  } catch (homeError) {
+    if (!kfdb) {
+      return routeUnavailableTrace(kind, id, homeError, undefined, 'KFDB trace client is not configured');
+    }
+    try {
+      return routeUnavailableTrace(kind, id, homeError, await kfdb.trace(kind, id));
+    } catch (fallbackError) {
+      return routeUnavailableTrace(kind, id, homeError, undefined, fallbackError);
+    }
+  }
+}
+
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { home, kfdb, operatorTools = false } = deps;
 
@@ -431,42 +557,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       id: z.string().describe('Trace subject id.'),
     },
     async ({ kind, id }) => {
-      if (kfdb && shouldPreferKfdbTrace(kind, id)) {
-        try {
-          return ok(withAssertionVoiceAnswer(kind, id, await kfdb.trace(kind, id)));
-        } catch (err) {
-          try {
-            return ok({ ...(await home.trace(kind, id) as Record<string, unknown>), kfdb_trace_error: err instanceof Error ? err.message : String(err) });
-          } catch {
-            return fail(err);
-          }
-        }
-      }
-
-      try {
-        const homeTrace = withAssertionVoiceAnswer(kind, id, await home.trace(kind, id));
-        if (kfdb && shouldUseKfdbTraceFallback(homeTrace)) {
-          try {
-            return ok({
-              ...(await kfdb.trace(kind, id) as Record<string, unknown>),
-              home_trace_confidence: (homeTrace as Record<string, unknown>)['confidence'],
-              home_trace_omissions: (homeTrace as Record<string, unknown>)['omissions'],
-            });
-          } catch {
-            /* Preserve the original home partial trace; the fallback is best-effort for read availability. */
-          }
-        }
-        return ok(homeTrace);
-      } catch (err) {
-        if (kfdb) {
-          try {
-            return ok({ ...(await kfdb.trace(kind, id) as Record<string, unknown>), ...fallbackReason(err) });
-          } catch {
-            /* Preserve the original home failure; the fallback is best-effort for read availability. */
-          }
-        }
-        return fail(err);
-      }
+      return ok(await resolveTrace(home, kfdb, kind, id));
     },
   );
 

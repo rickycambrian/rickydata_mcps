@@ -94,9 +94,10 @@ export class HomeKnowledgeClient {
     };
   }
 
-  private async requestJson<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async requestJson<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
+      signal,
       headers: {
         accept: 'application/json',
         authorization: await this.authHeader(),
@@ -129,9 +130,9 @@ export class HomeKnowledgeClient {
     return this.requestJson('GET', `/api/context-pack?${qs.toString()}`);
   }
 
-  trace(kind: string, id: string): Promise<unknown> {
+  trace(kind: string, id: string, timeoutMs = 4_000): Promise<unknown> {
     const qs = new URLSearchParams({ kind, id });
-    return this.requestJson('GET', `/api/knowledge/trace?${qs.toString()}`);
+    return this.requestJson('GET', `/api/knowledge/trace?${qs.toString()}`, undefined, AbortSignal.timeout(timeoutMs));
   }
 
   async nextQuestions(input: { topic?: string; limit: number }): Promise<unknown> {

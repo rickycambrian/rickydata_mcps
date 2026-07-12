@@ -4,7 +4,7 @@ import { ApiError, FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
-import { capKnowledgeBundleArgs, resolveNextQuestions, resolveReviewPending, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, withAssertionVoiceAnswer } from './tools.js';
+import { capKnowledgeBundleArgs, resolveNextQuestions, resolveReviewPending, resolveTrace, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, withAssertionVoiceAnswer } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
@@ -878,6 +878,33 @@ describe('KFDB read/write auth split', () => {
 });
 
 describe('trace fallback detection', () => {
+  it('returns a structured KFDB fallback when the Home trace route times out', async () => {
+    const home = { trace: vi.fn(() => new Promise<unknown>(() => undefined)) };
+    const kfdb = { trace: vi.fn(async () => ({ kind: 'wiki-page', id: 'agentic-knowledge-compiler', title: 'Agentic Knowledge Compiler' })) };
+
+    await expect(resolveTrace(home, kfdb, 'wiki-page', 'agentic-knowledge-compiler', 5)).resolves.toMatchObject({
+      status: 'route_unavailable',
+      fallback: 'kfdb_trace',
+      kind: 'wiki-page',
+      id: 'agentic-knowledge-compiler',
+      title: 'Agentic Knowledge Compiler',
+      home_error: expect.stringMatching(/timed out/i),
+    });
+  });
+
+  it('returns a structured route-unavailable result when both trace readers fail', async () => {
+    const home = { trace: vi.fn(async () => { throw new Error('home route failed'); }) };
+    const kfdb = { trace: vi.fn(async () => { throw new Error('kfdb trace failed'); }) };
+
+    await expect(resolveTrace(home, kfdb, 'wiki-page', 'missing-page', 5)).resolves.toMatchObject({
+      status: 'route_unavailable',
+      fallback: 'kfdb_trace',
+      home_error: 'home route failed',
+      fallback_error: 'kfdb trace failed',
+      subject: { kind: 'wiki-page', id: 'missing-page' },
+    });
+  });
+
   it('adds a canonical exact answer to knowledge-assertion traces', () => {
     expect(withAssertionVoiceAnswer('knowledge-assertion', 'zero-schema-law', {
       nodes: [{
