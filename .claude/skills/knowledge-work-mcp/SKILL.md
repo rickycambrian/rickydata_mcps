@@ -1,7 +1,7 @@
 ---
 name: knowledge-work-mcp
 description: Use when changing or deploying the Voice Knowledge Partner MCP, especially bundle limits, claim verification, KFDB-backed tools, or source-refresh production checks.
-allowed-tools: Bash(npm:*), Bash(gh:*), Bash(curl:*)
+allowed-tools: Bash(npm:*), Bash(gh:*), Bash(curl:*), Bash(node:*)
 ---
 
 # Knowledge Work MCP
@@ -12,7 +12,7 @@ Test and deploy `@rickydata/knowledge-work-mcp` without weakening its voice late
 
 ## Verified
 
-2026-07-11
+2026-07-12
 
 ## Setup/Prerequisites
 
@@ -47,14 +47,23 @@ The workflow's blocking `Verify production source commit` step polls the public 
 - The recommended broad-walkthrough call is `token_budget: 2500`, `page_limit: 15`, and `claim_limit: 30`.
 - Never open `.rickydata_cli/tool-results` to work around a large MCP result. Reduce the MCP request instead.
 - `trace` verifies an exact claim from an exact-claim-text bundle. A page-slug bundle can omit the target claim and must not be used to infer that the claim is unverified.
+- `trace` must never reject the MCP tool call because the Home trace route is slow or unavailable. Bound the Home request and return `status:"route_unavailable"`, `fallback:"kfdb_trace"`, the subject, and any best-effort KFDB payload as a successful tool result.
+- `semantic_search` requests `include_entities:true`, then immediately safe-projects each encrypted result. Every readable hit carries first-class `title`, `summary` (whitespace-normalized, at most 200 characters), and `slug`; never return the hydrated entity or full wiki body.
+- Preserve the distinction between the hydrated node `_id` and the semantic result's embedding id. Return them as `node_id` and `embedding_id`; do not overwrite the stable node identity with the embedding identity.
 
 ## Gotchas
 
 ### Source write succeeds but production remains stale
 
-- **Symptom:** the KFDB registration write succeeds while the public MCP record still reports the previous source commit.
-- **Cause:** a cached or expired operator credential can prevent the gateway reload after the write.
-- **Fix:** require the workflow's blocking `Verify production source commit` step to pass. The step polls the public record and fails after 15 minutes instead of reporting a false-green refresh.
+- **Symptom:** the KFDB registration write succeeds, `POST /api/servers/<id>/stop` returns `{"status":"stopped"}`, but the single-server reload returns HTTP 401 `Invalid or expired session`; the public MCP record stays on the previous source commit.
+- **Cause:** the stored `OPERATOR_WALLET_TOKEN` can expire even though the stop route accepts it. The authenticated `/health/reload/<id>` route requires a current gateway session.
+- **Fix:** do not rotate the wallet or the stored secret. Mint a fresh short-lived session through the existing `/api/auth/challenge` → wallet `signMessage` → `/api/auth/verify` flow, call the single-server reload as the authenticated admin, and let the already-running workflow's blocking production-SHA poll prove convergence. Verified 2026-07-12: reload returned `status:"updated"`, 15 tools, and workflow run `29190873565` passed against commit `b4248ac32f4b866066ecd5128c77e52fffa6d9b1`.
+
+### Semantic search is hydrated but leaks private body fields
+
+- **Symptom:** adding `include_entities:true` fixes hollow hits but exposes encrypted wiki bodies or replaces the stable node id with the embedding id.
+- **Cause:** the raw semantic response is returned directly instead of being projected at the MCP boundary.
+- **Fix:** safe-project immediately after hydration, emit only the compact fields above, and test that `body_md` and the raw `entity` object are absent.
 
 ### Trace reports a known verified claim as unverified
 
