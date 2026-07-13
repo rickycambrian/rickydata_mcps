@@ -4,7 +4,7 @@ import { ApiError, FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
-import { capKnowledgeBundleArgs, resolveNextQuestions, resolveReviewPending, resolveTrace, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, withAssertionVoiceAnswer } from './tools.js';
+import { capKnowledgeBundleArgs, resolveNextQuestions, resolveReviewPending, resolveSessionBrief, resolveTrace, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, withAssertionVoiceAnswer } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
@@ -98,6 +98,43 @@ describe('home auth fail-closed', () => {
 });
 
 describe('KFDB read/write auth split', () => {
+  it('keeps the verified knowledge bundle as the primary session brief', async () => {
+    const bundle = { pages: [{ slug: 'authority' }], claims: [{ verified: true }], reproducibility_hash: 'bundle-hash' };
+    const reader = {
+      knowledgeBundle: vi.fn().mockResolvedValue(bundle),
+      recentActivity: vi.fn(),
+    };
+
+    await expect(resolveSessionBrief(reader)).resolves.toBe(bundle);
+    expect(reader.recentActivity).not.toHaveBeenCalled();
+  });
+
+  it('keeps session_brief useful with an honest chronological fallback when the bundle endpoint is unavailable', async () => {
+    const recent = {
+      schema: 'rickydata.recent-activity.v1',
+      counts: { DEV: 2, PROOF: 1, KNOWLEDGE: 1, LEARN: 3, MEDIA: 2 },
+      complete: false,
+      omissions: ['WikiPage: 503'],
+      reproducibility_hash: 'receipt-hash',
+    };
+    const reader = {
+      knowledgeBundle: vi.fn().mockRejectedValue(new Error('overloaded')),
+      recentActivity: vi.fn().mockResolvedValue(recent),
+    };
+
+    await expect(resolveSessionBrief(reader)).resolves.toEqual(expect.objectContaining({
+      status: 'partial',
+      recent_activity: recent,
+      reproducibility_hash: 'receipt-hash',
+      diagnostics: expect.objectContaining({
+        source_coverage: 'partial',
+        knowledge_bundle_status: 'temporarily_unavailable',
+        fallback: 'recent_activity',
+      }),
+    }));
+    expect(reader.recentActivity).toHaveBeenCalledWith({ hours: 24, limit: 24 });
+  });
+
   it('projects exact recent activity with provenance, partial-source status, and a stable receipt', async () => {
     const rowsByLabel: Record<string, Array<Record<string, unknown>>> = {
       RickydataChangeEvidence: [{

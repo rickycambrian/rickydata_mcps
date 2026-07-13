@@ -43,8 +43,47 @@ interface TraceReader {
   trace(kind: string, id: string): Promise<unknown>;
 }
 
+interface SessionBriefReader {
+  knowledgeBundle(input: {
+    token_budget: number;
+    include_questions: boolean;
+  }): Promise<unknown>;
+  recentActivity(input: { hours: number; limit: number }): Promise<unknown>;
+}
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+export async function resolveSessionBrief(kfdb: SessionBriefReader): Promise<unknown> {
+  try {
+    return await kfdb.knowledgeBundle({
+      token_budget: 2500,
+      include_questions: true,
+    });
+  } catch {
+    const recent = await kfdb.recentActivity({ hours: 24, limit: 24 });
+    const recentValue = recent && typeof recent === 'object'
+      ? recent as Record<string, unknown>
+      : {};
+    return {
+      schema: 'rickydata.session-brief.v1',
+      status: 'partial',
+      pages: [],
+      claims: [],
+      open_questions: [],
+      recent_activity: recent,
+      diagnostics: {
+        source_coverage: 'partial',
+        knowledge_bundle_status: 'temporarily_unavailable',
+        fallback: 'recent_activity',
+      },
+      reproducibility_hash: typeof recentValue['reproducibility_hash'] === 'string'
+        ? recentValue['reproducibility_hash']
+        : '',
+      interpretation: 'The optimized knowledge bundle is temporarily unavailable. Use the attached exact chronological receipts and report missing sources as unknown, never zero.',
+    };
+  }
 }
 
 async function readTraceWithin(
@@ -420,12 +459,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     {},
     async () => {
       try {
-        return ok(
-          await requireKfdb(kfdb).knowledgeBundle({
-            token_budget: 2500,
-            include_questions: true,
-          }),
-        );
+        return ok(await resolveSessionBrief(requireKfdb(kfdb)));
       } catch (err) {
         return fail(err);
       }
