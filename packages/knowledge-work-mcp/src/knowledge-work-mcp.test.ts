@@ -1263,6 +1263,36 @@ describe('static S2D provider (keyless delegation)', () => {
     expect(headers['x-derive-key']).toBe('c'.repeat(64));
     expect(headers['x-wallet-address']).toBe('0x2222222222222222222222222222222222222222');
   });
+
+  it('constructs the KFDB client from delegated S2D credentials without a legacy API key', async () => {
+    const { loadKfdbClientFromEnv } = await import('./kfdb-client.js');
+    const { StaticS2DProvider } = await import('./s2d.js');
+    const provider = new StaticS2DProvider(
+      'session-abc',
+      'd'.repeat(64),
+      '0x3333333333333333333333333333333333333333',
+    );
+
+    expect(loadKfdbClientFromEnv({ KFDB_API_URL: 'https://db.test' }, provider))
+      .toBeInstanceOf(KfdbKnowledgeClient);
+  });
+
+  it('uses S2D authorization headers without emitting an empty legacy bearer', async () => {
+    const { StaticS2DProvider } = await import('./s2d.js');
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ pages: [] }));
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://db.test',
+      s2d: new StaticS2DProvider('session-abc', 'e'.repeat(64), '0x4444444444444444444444444444444444444444'),
+      fetchImpl,
+    });
+
+    await kfdb.knowledgeBundle({ query: 'delegated' });
+
+    const headers = fetchImpl.mock.calls[0][1]?.headers as Record<string, string>;
+    expect(headers).not.toHaveProperty('authorization');
+    expect(headers['x-derive-session-id']).toBe('session-abc');
+    expect(headers['x-derive-key']).toBe('e'.repeat(64));
+  });
 });
 
 describe('revoked/expired S2D session guidance', () => {

@@ -21,7 +21,7 @@ export function decorateS2DRejection(error: ApiError): ApiError {
 
 export interface KfdbClientDeps {
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string;
   walletAddress?: string;
   s2d?: S2DProvider | null;
   fetchImpl?: typeof fetch;
@@ -545,7 +545,7 @@ function voiceSafeDurations(text: string): string {
 
 export class KfdbKnowledgeClient {
   private readonly baseUrl: string;
-  private readonly apiKey: string;
+  private readonly apiKey?: string;
   private readonly walletAddress?: string;
   private readonly s2d: S2DProvider | null;
   private readonly fetchImpl: typeof fetch;
@@ -562,9 +562,9 @@ export class KfdbKnowledgeClient {
     const headers: Record<string, string> = {
       accept: 'application/json',
       'content-type': 'application/json',
-      authorization: `Bearer ${this.apiKey}`,
       'x-client-id': 'knowledge-work-mcp',
     };
+    if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
     if (this.walletAddress) headers['x-wallet-address'] = this.walletAddress;
     return headers;
   }
@@ -1140,7 +1140,7 @@ export function loadKfdbClientFromEnv(
 ): KfdbKnowledgeClient | null {
   const baseUrl = env.KFDB_API_URL?.trim();
   const apiKey = env.KFDB_API_KEY?.trim();
-  if (!baseUrl || !apiKey) return null;
+  if (!baseUrl || (!apiKey && !s2d)) return null;
   return new KfdbKnowledgeClient({
     baseUrl,
     apiKey,
