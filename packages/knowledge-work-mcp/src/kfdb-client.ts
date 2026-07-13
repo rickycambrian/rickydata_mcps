@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { ApiError, FailClosedError } from './errors.js';
 import type { S2DProvider } from './s2d.js';
 import type { WriteRequest } from './atoms.js';
@@ -543,6 +544,196 @@ function voiceSafeDurations(text: string): string {
   });
 }
 
+type RecentActivityKind = 'DEV' | 'PROOF' | 'KNOWLEDGE' | 'LEARN' | 'MEDIA';
+
+type RecentActivityEvent = {
+  id: string;
+  kind: RecentActivityKind;
+  occurred_at: string;
+  title: string;
+  summary: string;
+  repo: string;
+  source: { label: string; id: string; version: string };
+  commit_sha?: string;
+  course_slug?: string;
+  lesson_id?: string;
+  status?: string;
+};
+
+type RecentActivitySource = {
+  label: string;
+  ok: boolean;
+  row_count: number;
+  event_count: number;
+  watermark: string;
+  omission: string;
+};
+
+type RecentActivitySourceSpec = {
+  label: string;
+  limit: number;
+  events?: (row: Record<string, unknown>) => RecentActivityEvent[];
+};
+
+function parseJson<T>(value: string, fallback: T): T {
+  if (!value) return fallback;
+  try { return JSON.parse(value) as T; } catch { return fallback; }
+}
+
+function activityIso(row: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = str(row, key);
+    if (value && Number.isFinite(Date.parse(value))) return new Date(value).toISOString();
+  }
+  return '';
+}
+
+function activityEvent(
+  row: Record<string, unknown>,
+  options: {
+    kind: RecentActivityKind;
+    label: string;
+    at: string[];
+    ids: string[];
+    versions: string[];
+    title: string;
+    summary: string;
+    repo?: string;
+    commitSha?: string;
+    courseSlug?: string;
+    lessonId?: string;
+    status?: string;
+  },
+): RecentActivityEvent[] {
+  const occurredAt = activityIso(row, options.at);
+  const sourceId = options.ids.map((key) => str(row, key)).find(Boolean) || str(row, '_id');
+  if (!occurredAt || !sourceId) return [];
+  const version = options.versions.map((key) => str(row, key)).find(Boolean) || occurredAt;
+  return [{
+    id: `${options.label}:${sourceId}:${options.kind}`,
+    kind: options.kind,
+    occurred_at: occurredAt,
+    title: options.title,
+    summary: options.summary,
+    repo: options.repo || str(row, 'repo_id') || str(row, 'repo'),
+    source: { label: options.label, id: sourceId, version },
+    ...(options.commitSha ? { commit_sha: options.commitSha } : {}),
+    ...(options.courseSlug ? { course_slug: options.courseSlug } : {}),
+    ...(options.lessonId ? { lesson_id: options.lessonId } : {}),
+    ...(options.status ? { status: options.status } : {}),
+  }];
+}
+
+const RECENT_ACTIVITY_SOURCES: RecentActivitySourceSpec[] = [
+  {
+    label: 'RickydataChangeEvidence', limit: 3000,
+    events: (row) => activityEvent(row, {
+      kind: 'DEV', label: 'RickydataChangeEvidence', at: ['created_at', 'updated_at'],
+      ids: ['change_id', 'intent_id', '_id'], versions: ['commit_sha', 'updated_at'],
+      title: str(row, 'title') || str(row, 'summary') || 'Development change recorded',
+      summary: str(row, 'diff_summary') || str(row, 'summary') || 'A development change entered the evidence graph.',
+      commitSha: str(row, 'commit_sha'),
+    }),
+  },
+  {
+    label: 'EvidenceRecord', limit: 5000,
+    events: (row) => activityEvent(row, {
+      kind: 'PROOF', label: 'EvidenceRecord', at: ['created_at'],
+      ids: ['evidence_record_id', 'roadmap_item_id', '_id'], versions: ['commit_sha', 'created_at'],
+      title: str(row, 'roadmap_item_id') || 'Release evidence recorded',
+      summary: str(row, 'summary') || `${str(row, 'kind') || 'quality gate'} ${str(row, 'status') || 'recorded'}`,
+      commitSha: str(row, 'commit_sha'), status: str(row, 'status'),
+    }),
+  },
+  {
+    label: 'RickydataWikiCompilerRun', limit: 2500,
+    events: (row) => {
+      const diffs = parseJson<Array<{ status?: string }>>(str(row, 'diffs_json'), []);
+      const applied = diffs.filter((diff) => diff.status === 'applied' || diff.status === 'reverted').length;
+      if (!applied) return [];
+      return activityEvent(row, {
+        kind: 'KNOWLEDGE', label: 'RickydataWikiCompilerRun', at: ['finished_at'],
+        ids: ['run_id', '_id'], versions: ['cursor_to', 'finished_at'],
+        title: `${applied} wiki update${applied === 1 ? '' : 's'} applied`,
+        summary: `${num(row, 'atom_count')} knowledge atoms processed; ${applied} durable change${applied === 1 ? '' : 's'} graduated into the wiki.`,
+        repo: 'rickydata_home',
+      });
+    },
+  },
+  {
+    label: 'WikiPage', limit: 3000,
+    events: (row) => activityEvent(row, {
+      kind: 'KNOWLEDGE', label: 'WikiPage', at: ['updated_at', 'created_at'],
+      ids: ['slug', '_id'], versions: ['revision_hash', 'updated_at'],
+      title: str(row, 'title') || str(row, 'slug') || 'Wiki page updated',
+      summary: str(row, 'summary') || 'A durable knowledge page changed.', repo: 'rickydata_home',
+    }),
+  },
+  {
+    label: 'RickydataLearningDraft', limit: 2000,
+    events: (row) => {
+      const rawKind = str(row, 'artifact_kind');
+      const artifactKind = rawKind || (str(row, 'lesson_id') ? 'curriculum_text' : '');
+      const status = str(row, 'status');
+      const ready = artifactKind === 'curriculum_text'
+        ? status === 'published'
+        : artifactKind === 'deep_dive' && (status === 'ready' || status === 'published');
+      if (!ready) return [];
+      const courseSlug = str(row, 'course_slug');
+      const lessonId = str(row, 'lesson_id');
+      return activityEvent(row, {
+        kind: 'LEARN', label: 'RickydataLearningDraft', at: ['updated_at', 'created_at'],
+        ids: ['_id'], versions: ['updated_at', 'created_at'],
+        title: str(row, 'title') || (artifactKind === 'deep_dive' ? 'Deep dive ready' : 'Curriculum lesson published'),
+        summary: artifactKind === 'deep_dive'
+          ? 'A grounded deeper treatment is ready to read.'
+          : 'Grounded learner-facing text was published.',
+        repo: courseSlug || 'rickydata_home', courseSlug, lessonId, status,
+      });
+    },
+  },
+  {
+    label: 'RickydataVideoBrief', limit: 2000,
+    events: (row) => {
+      const status = str(row, 'status');
+      if (status !== 'rendered' && status !== 'published') return [];
+      const courseSlug = str(row, 'course_slug');
+      const lessonId = str(row, 'lesson_id');
+      return activityEvent(row, {
+        kind: 'MEDIA', label: 'RickydataVideoBrief', at: ['updated_at', 'created_at'],
+        ids: ['_id'], versions: ['updated_at', 'created_at'],
+        title: str(row, 'title') || 'Accompanying video ready',
+        summary: status === 'published' ? 'A grounded video was published.' : 'A grounded video was rendered and is ready to watch.',
+        repo: courseSlug || 'rickydata_learn', courseSlug, lessonId, status,
+      });
+    },
+  },
+  {
+    label: 'RickydataLessonVideo', limit: 2000,
+    events: (row) => activityEvent(row, {
+      kind: 'MEDIA', label: 'RickydataLessonVideo', at: ['published_at'],
+      ids: ['lesson_id', '_id'], versions: ['sha256', 'published_at'],
+      title: `${str(row, 'kind') || 'Lesson'} video published`,
+      summary: 'A grounded lesson now has published learner-facing video.', repo: 'rickydata_learn',
+      lessonId: str(row, 'lesson_id'), status: 'published',
+    }),
+  },
+  {
+    label: 'RickydataCourseAudio', limit: 1000,
+    events: (row) => activityEvent(row, {
+      kind: 'MEDIA', label: 'RickydataCourseAudio', at: ['published_at'],
+      ids: ['course_slug', '_id'], versions: ['sha256', 'published_at'],
+      title: `${str(row, 'course_slug') || 'Course'} audio published`,
+      summary: 'A course now has a durable audio edition.', repo: 'rickydata_learn',
+      courseSlug: str(row, 'course_slug'), status: 'published',
+    }),
+  },
+  { label: 'RickydataContentCandidate', limit: 2000 },
+  { label: 'RickydataContentJob', limit: 2000 },
+  { label: 'RickydataCourse', limit: 1000 },
+  { label: 'RickydataLesson', limit: 5000 },
+];
+
 export class KfdbKnowledgeClient {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
@@ -661,6 +852,149 @@ export class KfdbKnowledgeClient {
   private async queryKql(query: string): Promise<Record<string, unknown>[]> {
     const res = await this.postJson('/api/v1/query', { query }, await this.headersWithOptionalS2D(), true);
     return rowsOf(res);
+  }
+
+  /**
+   * Exact chronological projection for “what happened recently?” questions.
+   * This deliberately scans append-stable private labels instead of using
+   * semantic similarity, which can rank old but related material as recent.
+   */
+  async recentActivity(input: { hours?: number; limit?: number; now?: Date } = {}): Promise<unknown> {
+    const hours = Math.min(168, Math.max(1, Math.floor(input.hours ?? 24)));
+    const limit = Math.min(100, Math.max(1, Math.floor(input.limit ?? 40)));
+    const now = input.now ?? new Date();
+    if (!Number.isFinite(now.getTime())) throw new ApiError('kfdb', 400, 'recent activity now value is invalid');
+    const to = now.toISOString();
+    const fromMs = now.getTime() - hours * 60 * 60_000;
+    const from = new Date(fromMs).toISOString();
+
+    const reads = await Promise.all(RECENT_ACTIVITY_SOURCES.map(async (source) => {
+      try {
+        const rows = (await this.queryKql(`MATCH (n:${source.label}) RETURN n.* LIMIT ${source.limit}`)).map(unwrapRow);
+        const events = (source.events ? rows.flatMap(source.events) : [])
+          .filter((event) => {
+            const occurredAt = Date.parse(event.occurred_at);
+            return Number.isFinite(occurredAt) && occurredAt >= fromMs && occurredAt <= now.getTime();
+          });
+        const watermark = events.reduce(
+          (latest, event) => event.occurred_at > latest ? event.occurred_at : latest,
+          '',
+        );
+        const status: RecentActivitySource = {
+          label: source.label,
+          ok: true,
+          row_count: rows.length,
+          event_count: events.length,
+          watermark,
+          omission: '',
+        };
+        return { label: source.label, rows, events, status };
+      } catch (error) {
+        const omission = error instanceof ApiError
+          ? `${error.status}: ${error.body}`
+          : error instanceof Error ? error.message : String(error);
+        const status: RecentActivitySource = {
+          label: source.label,
+          ok: false,
+          row_count: 0,
+          event_count: 0,
+          watermark: '',
+          omission: omission.slice(0, 240),
+        };
+        return { label: source.label, rows: [] as Record<string, unknown>[], events: [] as RecentActivityEvent[], status };
+      }
+    }));
+
+    const rowsFor = (label: string): Record<string, unknown>[] => reads.find((read) => read.label === label)?.rows ?? [];
+    const byId = new Map<string, RecentActivityEvent>();
+    for (const event of reads.flatMap((read) => read.events)) {
+      const current = byId.get(event.id);
+      if (!current || event.occurred_at > current.occurred_at) byId.set(event.id, event);
+    }
+    const allEvents = [...byId.values()].sort(
+      (a, b) => b.occurred_at.localeCompare(a.occurred_at) || a.id.localeCompare(b.id),
+    );
+    const counts: Record<RecentActivityKind, number> = { DEV: 0, PROOF: 0, KNOWLEDGE: 0, LEARN: 0, MEDIA: 0 };
+    for (const event of allEvents) counts[event.kind] += 1;
+
+    const recommendations = rowsFor('RickydataContentCandidate')
+      .map((row) => {
+        const quality = parseJson<Record<string, unknown>>(str(row, 'quality_json'), {});
+        const impact = parseJson<Record<string, unknown>>(str(row, 'curriculum_impact_json'), {});
+        const recommendation = parseJson<Record<string, unknown>>(str(row, 'agent_recommendation_json'), {});
+        const status = str(row, 'status') || 'proposed';
+        if (str(row, 'text_status') !== 'ready' || quality['passed'] !== true || status === 'parked' || status === 'rejected') return null;
+        return {
+          id: str(row, 'candidate_id') || str(row, '_id'),
+          title: str(row, 'title'),
+          status,
+          quality: typeof quality['overall'] === 'number' ? quality['overall'] : 0,
+          action: String(recommendation['action'] ?? ''),
+          priority: String(recommendation['priority'] ?? ''),
+          rationale: String(recommendation['rationale'] ?? ''),
+          target_course: String(impact['targetCourse'] ?? impact['target_course'] ?? ''),
+          target_phase: String(impact['targetPhase'] ?? impact['target_phase'] ?? ''),
+          source_refs: parseJson<string[]>(str(row, 'source_refs_json'), []),
+          updated_at: str(row, 'updated_at'),
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row?.id))
+      .sort((a, b) => b.quality - a.quality || b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id))
+      .slice(0, 8);
+
+    const activeJobs = rowsFor('RickydataContentJob')
+      .filter((row) => ['queued', 'running', 'retry_wait', 'failed', 'dead_letter'].includes(str(row, 'status')))
+      .map((row) => ({
+        id: str(row, 'job_id') || str(row, '_id'),
+        candidate_id: str(row, 'candidate_id'),
+        kind: str(row, 'kind'),
+        status: str(row, 'status'),
+        stage: str(row, 'stage'),
+        detail: str(row, 'detail'),
+        updated_at: str(row, 'updated_at'),
+      }))
+      .filter((row) => Boolean(row.id))
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id))
+      .slice(0, 12);
+
+    const courseCount = new Set(rowsFor('RickydataCourse').map((row) => str(row, 'slug')).filter(Boolean)).size;
+    const lessonRows = rowsFor('RickydataLesson').filter((row) => str(row, '_id') && str(row, 'course_slug'));
+    const playableVideoLessons = new Set(
+      rowsFor('RickydataLessonVideo').map((row) => str(row, 'lesson_id')).filter(Boolean),
+    ).size;
+    const sources = reads.map((read) => read.status);
+    const curriculum = {
+      course_count: courseCount,
+      lesson_count: lessonRows.length,
+      playable_video_lessons: playableVideoLessons,
+      video_coverage_percent: lessonRows.length ? Math.round((playableVideoLessons / lessonRows.length) * 10_000) / 100 : 0,
+    };
+    const reproducibilityHash = createHash('sha256').update(JSON.stringify({
+      window: { from, to, hours },
+      events: allEvents.map((event) => [event.id, event.source.version]),
+      sources: sources.map((source) => [source.label, source.ok, source.row_count, source.event_count, source.watermark]),
+      recommendations: recommendations.map((row) => [row.id, row.quality, row.status, row.updated_at]),
+      active_jobs: activeJobs.map((row) => [row.id, row.status, row.stage, row.updated_at]),
+      curriculum,
+    })).digest('hex');
+    const omissions = sources.filter((source) => !source.ok).map((source) => `${source.label}: ${source.omission}`);
+
+    return {
+      schema: 'rickydata.recent-activity.v1',
+      window: { from, to, hours },
+      counts,
+      total_events: allEvents.length,
+      returned_events: Math.min(allEvents.length, limit),
+      events: allEvents.slice(0, limit),
+      recommendations,
+      active_jobs: activeJobs,
+      curriculum,
+      complete: omissions.length === 0,
+      sources,
+      omissions,
+      reproducibility_hash: reproducibilityHash,
+      interpretation: 'Chronological private-graph receipts. Missing sources are unknown, never zero; use trace or code_context to deepen these exact receipts.',
+    };
   }
 
   async wikiSearch(query: string, limit = 5): Promise<unknown> {

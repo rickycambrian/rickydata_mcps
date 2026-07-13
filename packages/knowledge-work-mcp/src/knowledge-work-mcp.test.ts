@@ -98,6 +98,86 @@ describe('home auth fail-closed', () => {
 });
 
 describe('KFDB read/write auth split', () => {
+  it('projects exact recent activity with provenance, partial-source status, and a stable receipt', async () => {
+    const rowsByLabel: Record<string, Array<Record<string, unknown>>> = {
+      RickydataChangeEvidence: [{
+        _id: 'change-1', title: 'Partner authority landed', summary: 'Wallet-scoped MCP reads are live.',
+        repo_id: 'mcp_deployments_registry', commit_sha: '607c4c491', created_at: '2026-07-13T11:00:00.000Z',
+      }],
+      EvidenceRecord: [{
+        _id: 'proof-1', evidence_record_id: 'proof-1', roadmap_item_id: 'partner-authority', kind: 'roundtrip',
+        status: 'passed', commit_sha: '607c4c491', created_at: '2026-07-13T11:10:00.000Z',
+      }],
+      RickydataWikiCompilerRun: [{
+        _id: 'wiki-run-1', run_id: 'wiki-run-1', atom_count: 8,
+        diffs_json: JSON.stringify([{ status: 'applied', diff: { page_slug: 'delegated-knowledge' } }]),
+        cursor_to: 'cursor-8', finished_at: '2026-07-13T11:20:00.000Z',
+      }],
+      RickydataLearningDraft: [{
+        _id: 'draft-1', artifact_kind: 'curriculum_text', status: 'published', title: 'Delegated knowledge lesson',
+        course_slug: 'verification-claims', lesson_id: 'lesson-7', source_refs_json: JSON.stringify(['proof-1']),
+        updated_at: '2026-07-13T11:30:00.000Z',
+      }],
+      RickydataVideoBrief: [{
+        _id: 'video-1', status: 'rendered', title: 'Delegated knowledge explainer',
+        course_slug: 'verification-claims', lesson_id: 'lesson-7', video_kind: 'lesson_video',
+        updated_at: '2026-07-13T11:40:00.000Z',
+      }],
+      RickydataContentCandidate: [{
+        _id: 'candidate-1', candidate_id: 'candidate-1', title: 'Deepen delegated authority', text_status: 'ready',
+        status: 'proposed', updated_at: '2026-07-13T11:45:00.000Z',
+        quality_json: JSON.stringify({ passed: true, overall: 91 }),
+        curriculum_impact_json: JSON.stringify({ action: 'new_lesson', targetCourse: 'verification-claims', targetPhase: 'in practice' }),
+        agent_recommendation_json: JSON.stringify({ action: 'add_to_curriculum', priority: 'now', rationale: 'Closes a verified operational gap.' }),
+        source_refs_json: JSON.stringify(['proof-1']),
+      }],
+      RickydataContentJob: [{
+        _id: 'job-1', job_id: 'job-1', candidate_id: 'candidate-1', kind: 'lesson_video', status: 'running',
+        stage: 'render', detail: 'Rendering lesson reel', updated_at: '2026-07-13T11:50:00.000Z',
+      }],
+      RickydataCourse: [{ _id: 'course-1', slug: 'verification-claims' }],
+      RickydataLesson: [{ _id: 'lesson-7', course_slug: 'verification-claims', content: 'A'.repeat(120) }],
+      RickydataLessonVideo: [{ _id: 'published-video-1', lesson_id: 'lesson-7', published_at: '2026-07-13T11:42:00.000Z' }],
+    };
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as { query?: string };
+      const label = body.query?.match(/MATCH \(n:([^\)]+)\)/)?.[1] ?? '';
+      if (label === 'WikiPage') return jsonResponse({ error: 'temporary source outage' }, { status: 503 });
+      return jsonResponse({ data: rowsByLabel[label] ?? [] });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test', apiKey: 'key', walletAddress: '0xb3e6', s2d: null, fetchImpl,
+    });
+
+    const result = await kfdb.recentActivity({
+      hours: 24,
+      limit: 20,
+      now: new Date('2026-07-13T12:00:00.000Z'),
+    }) as Record<string, unknown>;
+
+    expect(result).toMatchObject({
+      window: { from: '2026-07-12T12:00:00.000Z', to: '2026-07-13T12:00:00.000Z', hours: 24 },
+      counts: { DEV: 1, PROOF: 1, KNOWLEDGE: 1, LEARN: 1, MEDIA: 2 },
+      complete: false,
+      curriculum: { course_count: 1, lesson_count: 1, playable_video_lessons: 1 },
+    });
+    expect(result['events']).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'DEV', source: expect.objectContaining({ label: 'RickydataChangeEvidence', id: 'change-1' }), commit_sha: '607c4c491' }),
+      expect.objectContaining({ kind: 'LEARN', source: expect.objectContaining({ label: 'RickydataLearningDraft', id: 'draft-1' }), course_slug: 'verification-claims' }),
+      expect.objectContaining({ kind: 'MEDIA', source: expect.objectContaining({ label: 'RickydataVideoBrief', id: 'video-1' }) }),
+    ]));
+    expect(result['recommendations']).toEqual([
+      expect.objectContaining({ id: 'candidate-1', quality: 91, priority: 'now', source_refs: ['proof-1'] }),
+    ]);
+    expect(result['active_jobs']).toEqual([
+      expect.objectContaining({ id: 'job-1', status: 'running', stage: 'render' }),
+    ]);
+    expect(result['sources']).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'WikiPage', ok: false, omission: expect.stringContaining('503') }),
+    ]));
+    expect(result['reproducibility_hash']).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   it('caps broad knowledge bundles before they can spill into engine result files', () => {
     expect(capKnowledgeBundleArgs({
       token_budget: 32000,

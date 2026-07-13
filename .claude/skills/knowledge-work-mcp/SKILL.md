@@ -1,6 +1,6 @@
 ---
 name: knowledge-work-mcp
-description: Use when changing or deploying the Voice Knowledge Partner MCP, especially bundle limits, claim verification, KFDB-backed tools, or source-refresh production checks.
+description: Use when changing or deploying the Voice Knowledge Partner MCP, especially recent activity, bundle limits, claim verification, KFDB-backed tools, or source-refresh production checks.
 allowed-tools: Bash(npm:*), Bash(gh:*), Bash(curl:*), Bash(node:*)
 ---
 
@@ -12,7 +12,7 @@ Test and deploy `@rickydata/knowledge-work-mcp` without weakening its voice late
 
 ## Verified
 
-2026-07-12
+2026-07-13
 
 ## Setup/Prerequisites
 
@@ -39,7 +39,15 @@ gh workflow run publish-knowledge-work-mcp.yml \
   -f skip_version_bump=true
 ```
 
-The workflow's blocking `Verify production source commit` step polls the public MCP registration until its source commit equals the dispatched Git SHA and the server exposes exactly 15 tools. Treat a green workflow as the production receipt; do not infer success from the registry write alone.
+The workflow's blocking `Verify production source commit` step polls the public MCP registration until its source commit equals the dispatched Git SHA and the server exposes exactly 16 tools. Treat a green workflow as the production receipt; do not infer success from the registry write alone.
+
+## Recent Activity Contract
+
+- `recent_activity` is the chronological path for questions such as “what happened recently?”; do not substitute semantic-search relevance for its rolling time window.
+- It scans append-stable PRIVATE graph receipts and returns separate DEV, PROOF, KNOWLEDGE, LEARN, and MEDIA counts, exact source ids/versions, active content jobs, current quality-passed recommendations, curriculum coverage, and `reproducibility_hash`.
+- Individual source failures remain explicit in `sources` and `omissions`; `complete:false` means missing counts are unknown, never zero.
+- Use `trace` or `code_context` to deepen the exact receipts returned by `recent_activity`.
+- Verified locally on 2026-07-13 with 55 package tests, TypeScript build, and a real stdio `tools/list` handshake returning 16 tools.
 
 ## Voice Contracts
 
@@ -83,7 +91,7 @@ The workflow's blocking `Verify production source commit` step polls the public 
 |---|---|
 | Package tests | All tests pass |
 | Package build | TypeScript build passes |
-| Public tool count | 15 |
+| Public tool count | 16 |
 | Production source | Exact dispatched Git SHA |
 | Broad voice bundle | 2500 tokens, 15 pages, 30 claims |
 | Trace verification | Exact claim ID and exact-claim result |

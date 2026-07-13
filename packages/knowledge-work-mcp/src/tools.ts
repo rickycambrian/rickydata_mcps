@@ -433,6 +433,22 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   );
 
   server.tool(
+    'recent_activity',
+    'Exact chronological private-graph receipts for recent development, proof, wiki, learning-text, and media activity. Use for “what happened recently?”; missing sources are reported as unknown, never zero. Follow exact receipts with trace or code_context when deeper proof is needed.',
+    {
+      hours: z.number().int().min(1).max(168).optional().default(24).describe('Rolling UTC window in hours. Defaults to the exact past 24 hours.'),
+      limit: z.number().int().min(1).max(100).optional().default(40).describe('Maximum chronological receipts returned. Category counts still cover the full window.'),
+    },
+    async ({ hours, limit }) => {
+      try {
+        return ok(await requireKfdb(kfdb).recentActivity({ hours, limit }));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
     'knowledge_bundle',
     'Voice-capped Tier-1 knowledge bundle. Summarize this result directly; never open engine tool-result files.',
     {
@@ -663,7 +679,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   );
 
   // Operator sessions may opt into the queue-drain surface. The voice partner
-  // defaults to the exact 15-tool SPEC-026 contract.
+  // defaults to the 16-tool learner contract (SPEC-026 plus exact recent activity).
   if (operatorTools) server.tool(
     'queue_census',
     'Full-depth HITL queue census: per-kind counts over the whole ranked queue (not a display page) plus a small sample, optionally filtered to one kind. Use before/after bulk operations to verify drains actually landed.',

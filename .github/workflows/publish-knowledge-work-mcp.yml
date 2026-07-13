@@ -62,8 +62,8 @@ jobs:
             | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{for(const l of d.split('\n')){if(!l.trim())continue;let o;try{o=JSON.parse(l)}catch{continue};if(o.id===2){console.log(o.result.tools.length)}}})")
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
           echo "::notice::knowledge-work-mcp exposes $COUNT tools"
-          if [ "$COUNT" -ne 15 ]; then
-            echo "::error::Expected 15 tools, got $COUNT"
+          if [ "$COUNT" -ne 16 ]; then
+            echo "::error::Expected 16 tools, got $COUNT"
             exit 1
           fi
 
@@ -231,14 +231,14 @@ jobs:
             BODY=$(curl -fsS --max-time 30 "$MCP_GW/api/servers/$SERVER_ID" || true)
             SHA=$(printf '%s' "$BODY" | jq -r '.lastEnrichedCommitSha // empty' 2>/dev/null || true)
             COUNT=$(printf '%s' "$BODY" | jq -r '.toolsCount // 0' 2>/dev/null || true)
-            if [ "$SHA" = "${{ github.sha }}" ] && [ "$COUNT" -eq 15 ]; then
+            if [ "$SHA" = "${{ github.sha }}" ] && [ "$COUNT" -eq 16 ]; then
               echo "::notice::Production exposes $SHA with $COUNT tools"
               exit 0
             fi
             echo "Waiting for production source refresh (attempt $attempt/90, sha=${SHA:-missing}, tools=${COUNT:-0})"
             sleep 10
           done
-          echo "::error::Production did not expose ${{ github.sha }} with 15 tools"
+          echo "::error::Production did not expose ${{ github.sha }} with 16 tools"
           exit 1
 
       - name: Commit version bump

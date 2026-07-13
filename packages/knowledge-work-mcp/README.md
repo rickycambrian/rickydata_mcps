@@ -3,7 +3,7 @@
 Voice-ready MCP for the `rickydata-knowledge-partner` agent. It exposes a small
 second-brain tool surface over KFDB and rickydata_home:
 
-- Tier-0/Tier-1 reads: `session_brief`, `knowledge_bundle`, `semantic_search`
+- Tier-0/Tier-1 reads: `session_brief`, `recent_activity`, `knowledge_bundle`, `semantic_search`
 - Wiki and provenance reads: `wiki_search`, `wiki_page`, `context_pack`, `code_context`, `trace`
 - Growth writes: `capture_open_question`, `capture_idea`, `capture_decision`
 - Interview/HITL loop: `next_questions`, `record_answer`, `review_pending`, `resolve_item`
@@ -35,23 +35,24 @@ second-brain tool surface over KFDB and rickydata_home:
 
 ## Tools
 
-The package intentionally exposes exactly 15 tools:
+The package intentionally exposes exactly 16 tools:
 
 1. `session_brief`
-2. `knowledge_bundle`
-3. `semantic_search`
-4. `wiki_search`
-5. `wiki_page`
-6. `context_pack`
-7. `code_context`
-8. `trace`
-9. `capture_open_question`
-10. `capture_idea`
-11. `capture_decision`
-12. `next_questions`
-13. `record_answer`
-14. `review_pending`
-15. `resolve_item`
+2. `recent_activity`
+3. `knowledge_bundle`
+4. `semantic_search`
+5. `wiki_search`
+6. `wiki_page`
+7. `context_pack`
+8. `code_context`
+9. `trace`
+10. `capture_open_question`
+11. `capture_idea`
+12. `capture_decision`
+13. `next_questions`
+14. `record_answer`
+15. `review_pending`
+16. `resolve_item`
 
 ## Development
 

@@ -30,6 +30,9 @@ describe('knowledge-work-mcp publish workflow', () => {
     expect(workflow).toContain('lastEnrichedCommitSha');
     expect(workflow).toContain('${{ github.sha }}');
     expect(workflow).toContain('toolsCount');
+    expect(workflow).toContain('"$COUNT" -ne 16');
+    expect(workflow).toContain('"$COUNT" -eq 16');
+    expect(workflow).toContain('with 16 tools');
     expect(workflow).toContain('exit 1');
   });
 });
