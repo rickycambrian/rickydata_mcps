@@ -946,6 +946,53 @@ describe('KFDB read/write auth split', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('traces an exact EvidenceRecord source reference to its private commit receipt', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as { query?: string; scope?: string };
+      expect(body.scope).toBe('private');
+      if (body.query?.includes('EvidenceRecord')) {
+        return jsonResponse({ data: [{
+          _id: 'evidence-node-1',
+          evidence_record_id: 'authority-proof-1',
+          roadmap_item_id: 'knowledge-partner-authority',
+          kind: 'production-proof',
+          status: 'passed',
+          summary: 'The wallet-private partner path passed.',
+          repo_id: 'rickydata_home',
+          commit_sha: 'abc1234',
+          created_at: '2026-07-14T12:00:00.000Z',
+        }] });
+      }
+      return jsonResponse({ data: [] });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.trace('wiki-claim', 'evidence:authority-proof-1')).resolves.toMatchObject({
+      subject: { kind: 'evidence-record', id: 'authority-proof-1' },
+      kind: 'evidence-record',
+      id: 'authority-proof-1',
+      commitSha: 'abc1234',
+      repo: 'rickydata_home',
+      nodes: [
+        { type: 'EvidenceRecord', data: { status: 'passed', commitSha: 'abc1234' } },
+        { type: 'CommitReference', data: { commitSha: 'abc1234', repo: 'rickydata_home', provenance: 'EvidenceRecord.commit_sha' } },
+      ],
+      edges: [{ relation: 'records_commit' }],
+      authority: {
+        effective_wallet_address: '0xb3e6',
+        tenant_scope: 'wallet-private',
+        query_scope: 'private',
+        credential_type: 'kfdb-api-key',
+      },
+    });
+  });
+
   it('ranks the fast KFDB knowledge-bundle OpenQuestion projection for next_questions', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
       const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as Record<string, unknown>;
@@ -1224,6 +1271,27 @@ describe('trace fallback detection', () => {
       fallback_error: 'kfdb trace failed',
       subject: { kind: 'wiki-page', id: 'missing-page' },
     });
+  });
+
+  it('preserves independently verified KFDB authority when both trace readers fail', async () => {
+    const authority = {
+      effective_wallet_address: '0xb3e6',
+      tenant_scope: 'wallet-private',
+      query_scope: 'private',
+      credential_type: 'kfdb-s2d-session',
+    };
+    const home = { trace: vi.fn(async () => { throw new Error('home trace failed'); }) };
+    const kfdb = {
+      trace: vi.fn(async () => { throw new Error('kfdb trace failed'); }),
+      authority: vi.fn(async () => authority),
+    };
+
+    await expect(resolveTrace(home, kfdb, 'wiki-claim', 'evidence:missing', 5)).resolves.toMatchObject({
+      status: 'route_unavailable',
+      subject: { kind: 'wiki-claim', id: 'evidence:missing' },
+      authority,
+    });
+    expect(kfdb.authority).toHaveBeenCalledOnce();
   });
 
   it('adds a canonical exact answer to knowledge-assertion traces', () => {

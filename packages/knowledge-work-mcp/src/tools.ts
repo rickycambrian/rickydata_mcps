@@ -417,7 +417,10 @@ export async function resolveTrace(
           kfdb_trace_error: errorMessage(kfdbError),
         };
       } catch (homeError) {
-        return routeUnavailableTrace(kind, id, homeError, undefined, kfdbError);
+        return withTraceAuthority(
+          routeUnavailableTrace(kind, id, homeError, undefined, kfdbError),
+          kfdb,
+        );
       }
     }
   }
@@ -440,23 +443,29 @@ export async function resolveTrace(
       );
     }
     try {
-      return routeUnavailableTrace(
-        kind,
-        id,
-        'home trace returned an unavailable partial result',
-        {
-          ...(await kfdb.trace(kind, id) as Record<string, unknown>),
-          home_trace_confidence: homeValue['confidence'],
-          home_trace_omissions: homeValue['omissions'],
-        },
+      return withTraceAuthority(
+        routeUnavailableTrace(
+          kind,
+          id,
+          'home trace returned an unavailable partial result',
+          {
+            ...(await kfdb.trace(kind, id) as Record<string, unknown>),
+            home_trace_confidence: homeValue['confidence'],
+            home_trace_omissions: homeValue['omissions'],
+          },
+        ),
+        kfdb,
       );
     } catch (fallbackError) {
-      return routeUnavailableTrace(
-        kind,
-        id,
-        'home trace returned an unavailable partial result',
-        { best_effort: homeTrace },
-        fallbackError,
+      return withTraceAuthority(
+        routeUnavailableTrace(
+          kind,
+          id,
+          'home trace returned an unavailable partial result',
+          { best_effort: homeTrace },
+          fallbackError,
+        ),
+        kfdb,
       );
     }
   } catch (homeError) {
@@ -464,9 +473,15 @@ export async function resolveTrace(
       return routeUnavailableTrace(kind, id, homeError, undefined, 'KFDB trace client is not configured');
     }
     try {
-      return routeUnavailableTrace(kind, id, homeError, await kfdb.trace(kind, id));
+      return withTraceAuthority(
+        routeUnavailableTrace(kind, id, homeError, await kfdb.trace(kind, id)),
+        kfdb,
+      );
     } catch (fallbackError) {
-      return routeUnavailableTrace(kind, id, homeError, undefined, fallbackError);
+      return withTraceAuthority(
+        routeUnavailableTrace(kind, id, homeError, undefined, fallbackError),
+        kfdb,
+      );
     }
   }
 }

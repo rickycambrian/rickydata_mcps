@@ -1312,6 +1312,66 @@ export class KfdbKnowledgeClient {
       }, authorityHeaders);
     }
 
+    if (target.startsWith('evidence:')) {
+      const evidenceId = target.slice('evidence:'.length).trim();
+      const evidenceRows = await this.queryKql('MATCH (n:EvidenceRecord) RETURN n.* LIMIT 5000');
+      const evidence = evidenceRows
+        .map(unwrapRow)
+        .find((row) => [str(row, 'evidence_record_id'), str(row, '_id')].includes(evidenceId));
+      if (evidence) {
+        const commitSha = str(evidence, 'commit_sha');
+        const repo = str(evidence, 'repo_id') || str(evidence, 'repo');
+        const roadmapItemId = str(evidence, 'roadmap_item_id');
+        const summary = str(evidence, 'summary');
+        const status = str(evidence, 'status');
+        const evidenceNode = {
+          ref: { kind: 'evidence-record', id: evidenceId },
+          title: roadmapItemId || `EvidenceRecord ${evidenceId}`,
+          type: 'EvidenceRecord',
+          data: {
+            evidenceRecordId: evidenceId,
+            roadmapItemId,
+            kind: str(evidence, 'kind'),
+            status,
+            summary,
+            commitSha,
+            repo,
+            createdAt: str(evidence, 'created_at'),
+          },
+        };
+        const commitNode = commitSha ? {
+          ref: { kind: 'commit-reference', id: commitSha },
+          title: `Commit ${commitSha}`,
+          type: 'CommitReference',
+          data: { commitSha, repo, provenance: 'EvidenceRecord.commit_sha' },
+        } : null;
+        return this.withAuthority({
+          answer: `EvidenceRecord ${evidenceId}${status ? ` is ${status}` : ''}${commitSha ? ` and records commit ${commitSha}` : ''}${repo ? ` in ${repo}` : ''}.`,
+          subject: { kind: 'evidence-record', id: evidenceId },
+          kind: 'evidence-record',
+          id: evidenceId,
+          sourceRef: target,
+          commitSha,
+          repo,
+          status,
+          summary,
+          nodes: commitNode ? [evidenceNode, commitNode] : [evidenceNode],
+          edges: commitNode ? [{
+            source: evidenceNode.ref,
+            target: commitNode.ref,
+            relation: 'records_commit',
+            provenance: 'EvidenceRecord.commit_sha',
+          }] : [],
+          trace: [
+            { label: 'EvidenceRecord', id: evidenceId, sourceRef: target },
+            ...(commitSha ? [{ label: 'CommitReference', commitSha, repo, provenance: 'EvidenceRecord.commit_sha' }] : []),
+          ],
+          citation: { sourceRef: target, evidenceRecordId: evidenceId, commitSha, repo },
+          fallback: { source: 'kfdb_trace', reason: 'exact private EvidenceRecord receipt projection' },
+        }, authorityHeaders);
+      }
+    }
+
     const claimRows = await this.queryKql('MATCH (n:WikiClaim) RETURN n.* LIMIT 5000');
     const claim = claimRows
       .map(wikiClaimOf)
