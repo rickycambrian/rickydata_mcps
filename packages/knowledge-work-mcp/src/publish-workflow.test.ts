@@ -36,6 +36,16 @@ describe('knowledge-work-mcp publish workflow', () => {
     expect(workflow).toContain('exit 1');
   });
 
+  it('fails closed when the gateway cannot reload the source-backed runtime', () => {
+    const syncStep = workflow.match(
+      /- name: Sync server in MCP gateway \(instant single-entity refresh\)([\s\S]*?)(?=\n      - name:)/,
+    )?.[1] ?? '';
+    expect(syncStep).toContain('"updated"');
+    expect(syncStep).toContain('::error::MCP gateway single-server reload failed');
+    expect(syncStep).toContain('exit 1');
+    expect(syncStep).not.toContain('will pick up on next 10-min cycle');
+  });
+
   it('uses the verified source-backed lane when the npm package is not yet bootstrapped', () => {
     expect(workflow).toContain('id: distribution');
     expect(workflow).toContain('npm_available=false');

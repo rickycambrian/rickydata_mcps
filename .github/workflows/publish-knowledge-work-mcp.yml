@@ -244,9 +244,12 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
             -H "Content-Type: application/json" || echo '{"error":"sync failed"}')
           echo "Gateway sync: $RESPONSE"
-          echo "$RESPONSE" | grep -q '"updated"' \
-            && echo "::notice::MCP gateway synced knowledge-work-mcp v${{ steps.ver.outputs.version }}" \
-            || echo "::warning::gateway single-server sync failed (will pick up on next 10-min cycle)"
+          if echo "$RESPONSE" | grep -q '"updated"'; then
+            echo "::notice::MCP gateway synced knowledge-work-mcp v${{ steps.ver.outputs.version }}"
+          else
+            echo "::error::MCP gateway single-server reload failed; registry metadata is not runtime proof"
+            exit 1
+          fi
 
       - name: Verify production source commit
         if: steps.registry.outputs.type == 'git'
