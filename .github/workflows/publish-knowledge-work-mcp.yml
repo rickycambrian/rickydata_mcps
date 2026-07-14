@@ -67,8 +67,23 @@ jobs:
             exit 1
           fi
 
+      - name: Detect package distribution
+        id: distribution
+        run: |
+          if npm view "@rickydata/knowledge-work-mcp" version >/tmp/knowledge-work-npm-view.txt 2>&1; then
+            echo "npm_available=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::The npm package exists; publishing the next patch version"
+          elif grep -Eq 'E404|404 Not Found' /tmp/knowledge-work-npm-view.txt; then
+            echo "npm_available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::The npm package is not bootstrapped; using the verified source-backed lane"
+          else
+            cat /tmp/knowledge-work-npm-view.txt >&2
+            echo "::error::Could not determine npm distribution availability"
+            exit 1
+          fi
+
       - name: Bump patch version
-        if: inputs.skip_version_bump != true && inputs.refresh_source != true
+        if: inputs.skip_version_bump != true && inputs.refresh_source != true && steps.distribution.outputs.npm_available == 'true'
         run: npm version patch --no-git-tag-version --workspace @rickydata/knowledge-work-mcp
 
       - name: Capture version
@@ -79,7 +94,7 @@ jobs:
 
       - name: Skip if already published
         id: check
-        if: inputs.refresh_source != true
+        if: inputs.refresh_source != true && steps.distribution.outputs.npm_available == 'true'
         run: |
           if npm view "@rickydata/knowledge-work-mcp@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -90,7 +105,7 @@ jobs:
 
       - name: Publish to npm
         id: publish
-        if: inputs.refresh_source != true && steps.check.outputs.exists == 'false'
+        if: inputs.refresh_source != true && steps.distribution.outputs.npm_available == 'true' && steps.check.outputs.exists == 'false'
         # Publish from inside the package dir. `npm publish --workspace` can
         # 404 on first publish of a new scoped package.
         working-directory: packages/knowledge-work-mcp
@@ -100,7 +115,7 @@ jobs:
           NPM_CONFIG_PROVENANCE: 'true'
 
       - name: Verify published package
-        if: inputs.refresh_source != true
+        if: inputs.refresh_source != true && steps.distribution.outputs.npm_available == 'true'
         run: |
           PUBLISHED=$(npm view "@rickydata/knowledge-work-mcp@${{ steps.ver.outputs.version }}" version)
           test "$PUBLISHED" = "${{ steps.ver.outputs.version }}"
@@ -109,9 +124,9 @@ jobs:
       - name: Resolve registry mode
         id: registry
         run: |
-          if [ "${{ inputs.refresh_source }}" = "true" ]; then
+          if [ "${{ inputs.refresh_source == true || steps.distribution.outputs.npm_available != 'true' }}" = "true" ]; then
             echo "type=git" >> "$GITHUB_OUTPUT"
-            echo "::notice::Refreshing source-backed knowledge-work-mcp"
+            echo "::notice::Registering source-backed knowledge-work-mcp"
           else
             echo "type=npm" >> "$GITHUB_OUTPUT"
             echo "::notice::Registering npm-backed knowledge-work-mcp"
@@ -234,7 +249,7 @@ jobs:
             || echo "::warning::gateway single-server sync failed (will pick up on next 10-min cycle)"
 
       - name: Verify production source commit
-        if: inputs.refresh_source == true
+        if: steps.registry.outputs.type == 'git'
         timeout-minutes: 35
         run: |
           MCP_GW="${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}"
@@ -282,6 +297,7 @@ jobs:
           echo "## knowledge-work-mcp Publish Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Version**: ${{ steps.ver.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Tools**: ${{ steps.tools.outputs.count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **npm available**: ${{ steps.distribution.outputs.npm_available }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Already on npm**: ${{ steps.check.outputs.exists }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Publish**: ${{ steps.publish.outcome || 'skipped' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Registry mode**: ${{ steps.registry.outputs.type || 'unknown' }}" >> "$GITHUB_STEP_SUMMARY"
