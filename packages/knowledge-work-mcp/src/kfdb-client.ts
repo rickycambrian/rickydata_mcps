@@ -555,6 +555,7 @@ type RecentActivityEvent = {
   repo: string;
   source: { label: string; id: string; version: string };
   commit_sha?: string;
+  pr_url?: string;
   course_slug?: string;
   lesson_id?: string;
   status?: string;
@@ -588,6 +589,13 @@ function activityIso(row: Record<string, unknown>, keys: string[]): string {
   return '';
 }
 
+function canonicalGitHubPullRequestUrl(...values: string[]): string {
+  const pattern = /https:\/\/github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+\/pull\/[1-9]\d*/gi;
+  let found = '';
+  for (const match of values.join('\n').matchAll(pattern)) found = match[0];
+  return found;
+}
+
 function activityEvent(
   row: Record<string, unknown>,
   options: {
@@ -600,6 +608,7 @@ function activityEvent(
     summary: string;
     repo?: string;
     commitSha?: string;
+    prUrl?: string;
     courseSlug?: string;
     lessonId?: string;
     status?: string;
@@ -618,6 +627,7 @@ function activityEvent(
     repo: options.repo || str(row, 'repo_id') || str(row, 'repo'),
     source: { label: options.label, id: sourceId, version },
     ...(options.commitSha ? { commit_sha: options.commitSha } : {}),
+    ...(options.prUrl ? { pr_url: options.prUrl } : {}),
     ...(options.courseSlug ? { course_slug: options.courseSlug } : {}),
     ...(options.lessonId ? { lesson_id: options.lessonId } : {}),
     ...(options.status ? { status: options.status } : {}),
@@ -625,6 +635,25 @@ function activityEvent(
 }
 
 const RECENT_ACTIVITY_SOURCES: RecentActivitySourceSpec[] = [
+  {
+    label: 'RickydataCodeRun', limit: 3000,
+    events: (row) => {
+      const status = str(row, 'status') || 'running';
+      const engine = str(row, 'engine');
+      const prUrl = canonicalGitHubPullRequestUrl(
+        str(row, 'pr_url'),
+        str(row, 'transcript'),
+        str(row, 'tool_calls_json'),
+      );
+      return activityEvent(row, {
+        kind: 'DEV', label: 'RickydataCodeRun', at: ['finished_at', 'updated_at', 'started_at'],
+        ids: ['run_id', '_id'], versions: ['last_commit_sha', 'pr_url', 'finished_at', 'updated_at'],
+        title: str(row, 'task_slug') || str(row, 'name') || 'Delegated code run',
+        summary: `${status} delegated code run${engine ? ` via ${engine}` : ''}${prUrl ? '; pull request recorded' : ''}.`,
+        commitSha: str(row, 'last_commit_sha'), prUrl, status,
+      });
+    },
+  },
   {
     label: 'RickydataChangeEvidence', limit: 3000,
     events: (row) => activityEvent(row, {

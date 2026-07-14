@@ -32,6 +32,10 @@ second-brain tool surface over KFDB and rickydata_home:
 - KFDB capture tools require S2D and fail before fetch without it. They write
   only compiler-consumable atoms (`OpenQuestion`, `Discovery`) or route decisions
   through home HITL; they never write `WikiPage` or `WikiClaim`.
+- `recent_activity` treats Home's durable `RickydataCodeRun` rows as development
+  receipts alongside rickydata_git change evidence. A completed run can carry
+  its commit and canonical GitHub PR URL, but it remains DEV activity—not proof;
+  only commit-pinned `EvidenceRecord` rows enter the PROOF category.
 
 ## Tools
 

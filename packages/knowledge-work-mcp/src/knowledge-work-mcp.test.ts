@@ -137,6 +137,12 @@ describe('KFDB read/write auth split', () => {
 
   it('projects exact recent activity with provenance, partial-source status, and a stable receipt', async () => {
     const rowsByLabel: Record<string, Array<Record<string, unknown>>> = {
+      RickydataCodeRun: [{
+        _id: 'code-run-1', run_id: 'code-run-1', task_slug: 'issue-rickydata-code-49', status: 'completed',
+        repo_id: 'rickydata_code', engine: 'codex', last_commit_sha: '457d238',
+        transcript: 'Completed and opened https://github.com/rickycambrian/rickydata_code/pull/79',
+        finished_at: '2026-07-13T11:05:00.000Z',
+      }],
       RickydataChangeEvidence: [{
         _id: 'change-1', title: 'Partner authority landed', summary: 'Wallet-scoped MCP reads are live.',
         repo_id: 'mcp_deployments_registry', commit_sha: '607c4c491', created_at: '2026-07-13T11:00:00.000Z',
@@ -194,12 +200,20 @@ describe('KFDB read/write auth split', () => {
 
     expect(result).toMatchObject({
       window: { from: '2026-07-12T12:00:00.000Z', to: '2026-07-13T12:00:00.000Z', hours: 24 },
-      counts: { DEV: 1, PROOF: 1, KNOWLEDGE: 1, LEARN: 1, MEDIA: 2 },
+      counts: { DEV: 2, PROOF: 1, KNOWLEDGE: 1, LEARN: 1, MEDIA: 2 },
       complete: false,
       curriculum: { course_count: 1, lesson_count: 1, playable_video_lessons: 1 },
     });
     expect(result['events']).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'DEV', source: expect.objectContaining({ label: 'RickydataChangeEvidence', id: 'change-1' }), commit_sha: '607c4c491' }),
+      expect.objectContaining({
+        kind: 'DEV',
+        title: 'issue-rickydata-code-49',
+        status: 'completed',
+        pr_url: 'https://github.com/rickycambrian/rickydata_code/pull/79',
+        source: expect.objectContaining({ label: 'RickydataCodeRun', id: 'code-run-1' }),
+        commit_sha: '457d238',
+      }),
       expect.objectContaining({ kind: 'LEARN', source: expect.objectContaining({ label: 'RickydataLearningDraft', id: 'draft-1' }), course_slug: 'verification-claims' }),
       expect.objectContaining({ kind: 'MEDIA', source: expect.objectContaining({ label: 'RickydataVideoBrief', id: 'video-1' }) }),
     ]));
