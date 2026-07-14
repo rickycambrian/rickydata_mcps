@@ -24,7 +24,10 @@ export interface KfdbClientDeps {
   baseUrl: string;
   apiKey?: string;
   walletAddress?: string;
+  requestWalletAddress?: string;
   s2d?: S2DProvider | null;
+  requireS2D?: boolean;
+  s2dProvenance?: 'delegated-static' | 'legacy-wallet' | 'injected';
   fetchImpl?: typeof fetch;
 }
 
@@ -65,6 +68,7 @@ type KnowledgeBundle = {
   claims?: Array<Record<string, unknown>>;
   open_questions?: Array<Record<string, unknown>>;
   diagnostics?: Record<string, unknown>;
+  authority?: Record<string, unknown>;
   reproducibility_hash?: string;
 };
 
@@ -232,6 +236,19 @@ function rowsOf(response: unknown): Record<string, unknown>[] {
   const r = response as { data?: unknown; rows?: unknown };
   const arr = r?.data ?? r?.rows;
   return Array.isArray(arr) ? (arr as Record<string, unknown>[]) : [];
+}
+
+function containsCiphertext(value: unknown): boolean {
+  if (typeof value === 'string') return value.startsWith('__enc_');
+  if (Array.isArray(value)) return value.some(containsCiphertext);
+  if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).some(containsCiphertext);
+  return false;
+}
+
+function assertNoCiphertext(value: unknown, surface: string): void {
+  if (containsCiphertext(value)) {
+    throw new FailClosedError(`KFDB ciphertext boundary violation in ${surface}; refusing to return undecrypted private data.`);
+  }
 }
 
 function str(row: Record<string, unknown>, key: string): string {
@@ -589,13 +606,6 @@ function activityIso(row: Record<string, unknown>, keys: string[]): string {
   return '';
 }
 
-function canonicalGitHubPullRequestUrl(...values: string[]): string {
-  const pattern = /https:\/\/github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+\/pull\/[1-9]\d*/gi;
-  let found = '';
-  for (const match of values.join('\n').matchAll(pattern)) found = match[0];
-  return found;
-}
-
 function activityEvent(
   row: Record<string, unknown>,
   options: {
@@ -636,33 +646,53 @@ function activityEvent(
 
 const RECENT_ACTIVITY_SOURCES: RecentActivitySourceSpec[] = [
   {
-    label: 'RickydataCodeRun', limit: 3000,
+    label: 'RickydataGitCommit', limit: 20_000,
     events: (row) => {
-      const status = str(row, 'status') || 'running';
-      const engine = str(row, 'engine');
-      const prUrl = canonicalGitHubPullRequestUrl(
-        str(row, 'pr_url'),
-        str(row, 'transcript'),
-        str(row, 'tool_calls_json'),
-      );
+      const sha = str(row, 'commit_sha');
+      const repo = str(row, 'repo_id');
+      if (!sha || !repo) return [];
       return activityEvent(row, {
-        kind: 'DEV', label: 'RickydataCodeRun', at: ['finished_at', 'updated_at', 'started_at'],
-        ids: ['run_id', '_id'], versions: ['last_commit_sha', 'pr_url', 'finished_at', 'updated_at'],
-        title: str(row, 'task_slug') || str(row, 'name') || 'Delegated code run',
-        summary: `${status} delegated code run${engine ? ` via ${engine}` : ''}${prUrl ? '; pull request recorded' : ''}.`,
-        commitSha: str(row, 'last_commit_sha'), prUrl, status,
+        kind: 'DEV', label: 'RickydataGitCommit',
+        at: ['committed_at', 'authored_at', 'last_attributed_at'],
+        ids: ['_id', 'commit_sha'], versions: ['commit_sha'],
+        title: str(row, 'subject') || `Commit ${sha.slice(0, 10)}`,
+        summary: str(row, 'message') || str(row, 'subject') || 'An immutable repository commit was recorded.',
+        repo, commitSha: sha,
       });
     },
   },
   {
-    label: 'RickydataChangeEvidence', limit: 3000,
-    events: (row) => activityEvent(row, {
-      kind: 'DEV', label: 'RickydataChangeEvidence', at: ['created_at', 'updated_at'],
-      ids: ['change_id', 'intent_id', '_id'], versions: ['commit_sha', 'updated_at'],
-      title: str(row, 'title') || str(row, 'summary') || 'Development change recorded',
-      summary: str(row, 'diff_summary') || str(row, 'summary') || 'A development change entered the evidence graph.',
-      commitSha: str(row, 'commit_sha'),
-    }),
+    label: 'RickydataDevelopmentEpisode', limit: 20_000,
+    events: (row) => {
+      const sha = str(row, 'commit_sha');
+      const repo = str(row, 'repo_id');
+      if (!sha || !repo) return [];
+      return activityEvent(row, {
+        kind: 'DEV', label: 'RickydataDevelopmentEpisode', at: ['occurred_at'],
+        ids: ['episode_id', '_id'], versions: ['commit_sha'],
+        title: str(row, 'title') || `Development episode ${sha.slice(0, 10)}`,
+        summary: [
+          str(row, 'problem_or_opportunity'),
+          str(row, 'implementation_summary'),
+          str(row, 'verification_summary'),
+        ].filter(Boolean).join(' · '),
+        repo,
+        commitSha: sha,
+      });
+    },
+  },
+  {
+    label: 'RickydataDailyLearningBrief', limit: 1000,
+    events: (row) => {
+      if (str(row, 'status') !== 'complete' || num(row, 'publishable') !== 1) return [];
+      return activityEvent(row, {
+        kind: 'LEARN', label: 'RickydataDailyLearningBrief', at: ['created_at', 'updated_at'],
+        ids: ['_id'], versions: ['reproducibility_hash'],
+        title: str(row, 'title') || `Daily development brief ${str(row, 'day')}`,
+        summary: str(row, 'summary') || 'A complete, commit-backed daily learning brief was published.',
+        repo: 'rickydata', lessonId: str(row, 'lesson_id'), status: 'complete',
+      });
+    },
   },
   {
     label: 'EvidenceRecord', limit: 5000,
@@ -672,6 +702,16 @@ const RECENT_ACTIVITY_SOURCES: RecentActivitySourceSpec[] = [
       title: str(row, 'roadmap_item_id') || 'Release evidence recorded',
       summary: str(row, 'summary') || `${str(row, 'kind') || 'quality gate'} ${str(row, 'status') || 'recorded'}`,
       commitSha: str(row, 'commit_sha'), status: str(row, 'status'),
+    }),
+  },
+  {
+    label: 'RickydataChangeEvidence', limit: 3000,
+    events: (row) => activityEvent(row, {
+      kind: 'DEV', label: 'RickydataChangeEvidence', at: ['created_at', 'updated_at'],
+      ids: ['change_id', 'intent_id', '_id'], versions: ['commit_sha', 'updated_at'],
+      title: str(row, 'title') || str(row, 'summary') || 'Development change recorded',
+      summary: str(row, 'diff_summary') || str(row, 'summary') || 'A development change entered the evidence graph.',
+      commitSha: str(row, 'commit_sha'),
     }),
   },
   {
@@ -696,6 +736,46 @@ const RECENT_ACTIVITY_SOURCES: RecentActivitySourceSpec[] = [
       ids: ['slug', '_id'], versions: ['revision_hash', 'updated_at'],
       title: str(row, 'title') || str(row, 'slug') || 'Wiki page updated',
       summary: str(row, 'summary') || 'A durable knowledge page changed.', repo: 'rickydata_home',
+    }),
+  },
+  {
+    label: 'RickydataCourse', limit: 1000,
+    events: (row) => activityEvent(row, {
+      kind: 'LEARN', label: 'RickydataCourse', at: ['generated_at'],
+      ids: ['slug', '_id'], versions: ['generated_at'],
+      title: str(row, 'title') || str(row, 'slug') || 'Course generated',
+      summary: str(row, 'summary') || 'Grounded development work graduated into a learning course.',
+      repo: str(row, 'repo') || str(row, 'slug'), courseSlug: str(row, 'slug'),
+    }),
+  },
+  {
+    label: 'RickydataLearningJob', limit: 5000,
+    events: (row) => str(row, 'status') === 'succeeded' ? activityEvent(row, {
+      kind: 'LEARN', label: 'RickydataLearningJob', at: ['finished_at'],
+      ids: ['job_id', '_id'], versions: ['finished_at'],
+      title: str(row, 'course_slug') || 'Learning generation completed',
+      summary: str(row, 'message') || 'A learning generation job completed.',
+      repo: str(row, 'repo'), courseSlug: str(row, 'course_slug'), status: 'succeeded',
+    }) : [],
+  },
+  {
+    label: 'RickydataLessonVideo', limit: 2000,
+    events: (row) => activityEvent(row, {
+      kind: 'MEDIA', label: 'RickydataLessonVideo', at: ['published_at'],
+      ids: ['lesson_id', '_id'], versions: ['sha256', 'published_at'],
+      title: `${str(row, 'kind') || 'Lesson'} video published`,
+      summary: 'A grounded lesson now has published learner-facing video.', repo: 'rickydata_learn',
+      lessonId: str(row, 'lesson_id'), status: 'published',
+    }),
+  },
+  {
+    label: 'RickydataCourseAudio', limit: 1000,
+    events: (row) => activityEvent(row, {
+      kind: 'MEDIA', label: 'RickydataCourseAudio', at: ['published_at'],
+      ids: ['course_slug', '_id'], versions: ['sha256', 'published_at'],
+      title: `${str(row, 'course_slug') || 'Course'} audio published`,
+      summary: 'A course now has a durable audio edition.', repo: 'rickydata_learn',
+      courseSlug: str(row, 'course_slug'), status: 'published',
     }),
   },
   {
@@ -737,45 +817,41 @@ const RECENT_ACTIVITY_SOURCES: RecentActivitySourceSpec[] = [
       });
     },
   },
-  {
-    label: 'RickydataLessonVideo', limit: 2000,
-    events: (row) => activityEvent(row, {
-      kind: 'MEDIA', label: 'RickydataLessonVideo', at: ['published_at'],
-      ids: ['lesson_id', '_id'], versions: ['sha256', 'published_at'],
-      title: `${str(row, 'kind') || 'Lesson'} video published`,
-      summary: 'A grounded lesson now has published learner-facing video.', repo: 'rickydata_learn',
-      lessonId: str(row, 'lesson_id'), status: 'published',
-    }),
-  },
-  {
-    label: 'RickydataCourseAudio', limit: 1000,
-    events: (row) => activityEvent(row, {
-      kind: 'MEDIA', label: 'RickydataCourseAudio', at: ['published_at'],
-      ids: ['course_slug', '_id'], versions: ['sha256', 'published_at'],
-      title: `${str(row, 'course_slug') || 'Course'} audio published`,
-      summary: 'A course now has a durable audio edition.', repo: 'rickydata_learn',
-      courseSlug: str(row, 'course_slug'), status: 'published',
-    }),
-  },
+  { label: 'RickydataLesson', limit: 5000 },
+  { label: 'RickydataLessonProgress', limit: 5000 },
+  { label: 'RickydataFeedComment', limit: 5000 },
+  { label: 'RickydataLearningChallenge', limit: 5000 },
+  { label: 'RickydataAnswerFeedback', limit: 5000 },
   { label: 'RickydataContentCandidate', limit: 2000 },
   { label: 'RickydataContentJob', limit: 2000 },
-  { label: 'RickydataCourse', limit: 1000 },
-  { label: 'RickydataLesson', limit: 5000 },
 ];
+
+export const RECENT_ACTIVITY_SOURCE_LABELS = RECENT_ACTIVITY_SOURCES.map((source) => source.label);
 
 export class KfdbKnowledgeClient {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
   private readonly walletAddress?: string;
+  private readonly requestWalletAddress?: string;
   private readonly s2d: S2DProvider | null;
+  private readonly requireS2D: boolean;
+  private readonly s2dProvenance: 'delegated-static' | 'legacy-wallet' | 'injected';
   private readonly fetchImpl: typeof fetch;
 
   constructor(deps: KfdbClientDeps) {
     this.baseUrl = deps.baseUrl.replace(/\/$/, '');
     this.apiKey = deps.apiKey;
     this.walletAddress = deps.walletAddress?.toLowerCase();
+    this.requestWalletAddress = deps.requestWalletAddress?.toLowerCase();
     this.s2d = deps.s2d ?? null;
+    this.requireS2D = deps.requireS2D ?? false;
+    this.s2dProvenance = deps.s2dProvenance ?? 'injected';
     this.fetchImpl = deps.fetchImpl ?? fetch;
+    if (this.walletAddress && this.requestWalletAddress && this.walletAddress !== this.requestWalletAddress) {
+      throw new FailClosedError(
+        `Wallet authority mismatch: delegated KFDB wallet ${this.walletAddress} does not match gateway requester ${this.requestWalletAddress}.`,
+      );
+    }
   }
 
   private baseHeaders(): Record<string, string> {
@@ -791,16 +867,34 @@ export class KfdbKnowledgeClient {
 
   private async headersWithOptionalS2D(): Promise<Record<string, string>> {
     const headers = this.baseHeaders();
-    if (!this.s2d) return headers;
-    try {
-      const creds = await this.s2d.ensure();
-      if (!creds) return headers;
-      headers['x-wallet-address'] = creds.walletAddress || headers['x-wallet-address'] || '';
-      headers['x-derive-session-id'] = creds.sessionId;
-      headers['x-derive-key'] = creds.keyHex;
+    if (!this.s2d) {
+      if (this.requireS2D) {
+        throw new FailClosedError('Sign-to-derive authority is required for this wallet-private read; refusing network egress.');
+      }
       return headers;
-    } catch {
+    }
+    const creds = await this.s2d.ensure();
+    if (!creds) {
+      if (this.requireS2D) {
+        throw new FailClosedError('Sign-to-derive authority is unavailable for this wallet-private read; refusing network egress.');
+      }
       return headers;
+    }
+    this.assertCredentialWallet(creds.walletAddress);
+    headers['x-wallet-address'] = creds.walletAddress;
+    headers['x-derive-session-id'] = creds.sessionId;
+    headers['x-derive-key'] = creds.keyHex;
+    return headers;
+  }
+
+  private assertCredentialWallet(walletAddress: string): void {
+    const effective = walletAddress.toLowerCase();
+    for (const expected of [this.walletAddress, this.requestWalletAddress]) {
+      if (expected && expected !== effective) {
+        throw new FailClosedError(
+          `Wallet authority mismatch: derive credential ${effective} does not match expected requester ${expected}.`,
+        );
+      }
     }
   }
 
@@ -814,12 +908,39 @@ export class KfdbKnowledgeClient {
     if (!creds) {
       throw new FailClosedError('Sign-to-derive session unavailable; refusing capture before network egress.');
     }
+    this.assertCredentialWallet(creds.walletAddress);
     return {
       ...this.baseHeaders(),
       'x-wallet-address': creds.walletAddress,
       'x-derive-session-id': creds.sessionId,
       'x-derive-key': creds.keyHex,
     };
+  }
+
+  private authorityMetadata(headers: Record<string, string>): Record<string, unknown> {
+    let endpoint = this.baseUrl;
+    try { endpoint = new URL(this.baseUrl).origin; } catch { /* keep configured base */ }
+    const sessionId = headers['x-derive-session-id'] || '';
+    return {
+      effective_wallet_address: headers['x-wallet-address'] || null,
+      requester_wallet_address: this.requestWalletAddress || headers['x-wallet-address'] || null,
+      tenant_scope: 'wallet-private',
+      query_scope: 'private',
+      kfdb_endpoint: endpoint,
+      credential_type: sessionId ? 'kfdb-s2d-session' : 'kfdb-api-key',
+      session_id_fingerprint: sessionId
+        ? createHash('sha256').update(sessionId).digest('hex').slice(0, 12)
+        : null,
+      session_id_provenance: sessionId ? this.s2dProvenance : null,
+    };
+  }
+
+  private withAuthority(value: unknown, headers: Record<string, string>): unknown {
+    const authority = this.authorityMetadata(headers);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return { ...(value as Record<string, unknown>), authority };
+    }
+    return { result: value, authority };
   }
 
   private async requestJson<T>(
@@ -875,12 +996,17 @@ export class KfdbKnowledgeClient {
     include_questions?: boolean;
     question_limit?: number;
   }): Promise<unknown> {
-    return this.postJson('/api/v1/agent/knowledge', params, await this.headersWithOptionalS2D(), true);
+    const headers = await this.headersWithOptionalS2D();
+    const result = await this.postJson('/api/v1/agent/knowledge', params, headers, true);
+    assertNoCiphertext(result, 'knowledge_bundle');
+    return this.withAuthority(result, headers);
   }
 
   private async queryKql(query: string): Promise<Record<string, unknown>[]> {
-    const res = await this.postJson('/api/v1/query', { query }, await this.headersWithOptionalS2D(), true);
-    return rowsOf(res);
+    const res = await this.postJson('/api/v1/query', { query, scope: 'private' }, await this.headersWithOptionalS2D(), true);
+    const rows = rowsOf(res);
+    for (const row of rows) assertNoCiphertext(row, query);
+    return rows;
   }
 
   /**
@@ -919,6 +1045,9 @@ export class KfdbKnowledgeClient {
         };
         return { label: source.label, rows, events, status };
       } catch (error) {
+        if (error instanceof FailClosedError || (error instanceof ApiError && (error.status === 401 || error.status === 403))) {
+          throw error;
+        }
         const omission = error instanceof ApiError
           ? `${error.status}: ${error.body}`
           : error instanceof Error ? error.message : String(error);
@@ -1008,6 +1137,7 @@ export class KfdbKnowledgeClient {
     })).digest('hex');
     const omissions = sources.filter((source) => !source.ok).map((source) => `${source.label}: ${source.omission}`);
 
+    const authorityHeaders = await this.headersWithOptionalS2D();
     return {
       schema: 'rickydata.recent-activity.v1',
       window: { from, to, hours },
@@ -1021,6 +1151,7 @@ export class KfdbKnowledgeClient {
       complete: omissions.length === 0,
       sources,
       omissions,
+      authority: this.authorityMetadata(authorityHeaders),
       reproducibility_hash: reproducibilityHash,
       interpretation: 'Chronological private-graph receipts. Missing sources are unknown, never zero; use trace or code_context to deepen these exact receipts.',
     };
@@ -1052,6 +1183,7 @@ export class KfdbKnowledgeClient {
         diagnostics: bundle.diagnostics ?? {},
         reproducibility_hash: bundle.reproducibility_hash,
       },
+      authority: bundle.authority,
     };
   }
 
@@ -1113,6 +1245,7 @@ export class KfdbKnowledgeClient {
         diagnostics: bundle.diagnostics ?? {},
         reproducibility_hash: bundle.reproducibility_hash,
       },
+      authority: bundle.authority,
     };
   }
 
@@ -1120,6 +1253,7 @@ export class KfdbKnowledgeClient {
     const traceKind = kind.trim().toLowerCase();
     const target = id.trim();
     if (!target) throw new ApiError('kfdb', 400, 'trace id is required');
+    const authorityHeaders = await this.headersWithOptionalS2D();
 
     if (traceKind === 'knowledge-assertion' || traceKind === 'assertion') {
       const assertionRows = await this.queryKql('MATCH (n:RickydataKnowledgeAssertion) RETURN n.* LIMIT 500');
@@ -1135,7 +1269,7 @@ export class KfdbKnowledgeClient {
       try { anchor = JSON.parse(anchorJson) as Record<string, unknown>; } catch { /* Keep exact raw JSON in the trace. */ }
       try { oracle = JSON.parse(oracleJson) as Record<string, unknown>; } catch { /* Keep exact raw JSON in the trace. */ }
       const title = str(assertion, 'title') || target;
-      return {
+      return this.withAuthority({
         subject: { kind: 'knowledge-assertion', id: target },
         title,
         confidence: 'recorded',
@@ -1163,15 +1297,15 @@ export class KfdbKnowledgeClient {
         }],
         edges: [],
         omissions: [{ reason: 'latest-lint-run-omitted-from-fast-path' }],
-      };
+      }, authorityHeaders);
     }
 
     if (traceKind === 'wiki-page' || traceKind === 'wikipage' || traceKind === 'page') {
-      return {
+      return this.withAuthority({
         kind: 'wiki-page',
         id: target,
         ...(await this.wikiPage(target) as Record<string, unknown>),
-      };
+      }, authorityHeaders);
     }
 
     const claimRows = await this.queryKql('MATCH (n:WikiClaim) RETURN n.* LIMIT 5000');
@@ -1210,7 +1344,7 @@ export class KfdbKnowledgeClient {
     const rawAnswer = `Page ${pageSlug}; claim ${claim.id}; ${verified ? 'verified' : 'recorded but not yet verified'}. ${claimText}`;
     const answer = voiceSafeDurations(rawAnswer);
 
-    return {
+    return this.withAuthority({
       answer,
       rawAnswer,
       claimText,
@@ -1228,7 +1362,7 @@ export class KfdbKnowledgeClient {
         { label: 'WikiPage', slug: pageSlug },
       ],
       fallback: { source: 'kfdb_trace', reason: 'home trace route unavailable' },
-    };
+    }, authorityHeaders);
   }
 
   async nextQuestions(input: { topic?: string; limit: number }): Promise<unknown> {
@@ -1324,10 +1458,16 @@ export class KfdbKnowledgeClient {
         }
       }),
     );
-    return { query: input.query, min_similarity: input.minSimilarity, labels: results };
+    return {
+      query: input.query,
+      min_similarity: input.minSimilarity,
+      labels: results,
+      authority: this.authorityMetadata(headers),
+    };
   }
 
   async codeContext(params: { task: string; repo?: string }): Promise<unknown> {
+    const authorityHeaders = await this.headersWithOptionalS2D();
     const body: Record<string, unknown> = {
       query: params.task,
       token_budget: 3000,
@@ -1340,7 +1480,7 @@ export class KfdbKnowledgeClient {
     if (params.repo?.trim()) {
       repoResolution = await this.resolveCodeRepoScope(params.repo);
       if (repoResolution['status'] !== 'resolved') {
-        return {
+        return this.withAuthority({
           evidence_items: [],
           graph_neighborhood: [],
           retrieval_metadata: {
@@ -1351,28 +1491,28 @@ export class KfdbKnowledgeClient {
           },
           diagnostics: { repo_scope_unavailable: true, evidence_count: 0 },
           repo_resolution: repoResolution,
-        };
+        }, authorityHeaders);
       }
       body['repo_scope'] = (repoResolution['resolved'] as Array<{ repo_id: string }>).map((item) => item.repo_id);
     }
     let result = await this.postJson<unknown>(
       '/api/v1/agent/context',
       body,
-      await this.headersWithOptionalS2D(),
+      authorityHeaders,
       true,
     );
     const focusedQueries = missingCompoundIdentifierQueries(params.task, result);
     if (focusedQueries.length > 0) {
-      const headers = await this.headersWithOptionalS2D();
       const supplements = await Promise.all(focusedQueries.map((query) => this.postJson<unknown>(
         '/api/v1/agent/context',
         { ...body, query },
-        headers,
+        authorityHeaders,
         true,
       )));
       result = mergeCodeContextResults(result, supplements, focusedQueries);
     }
-    if (!repoResolution) return result;
+    assertNoCiphertext(result, 'code_context');
+    if (!repoResolution) return this.withAuthority(result, authorityHeaders);
     if (result && typeof result === 'object' && !Array.isArray(result)) {
       const value = result as Record<string, unknown>;
       const evidence = Array.isArray(value['evidence_items']) ? value['evidence_items'] : [];
@@ -1386,7 +1526,7 @@ export class KfdbKnowledgeClient {
       const diagnostics = value['diagnostics'] && typeof value['diagnostics'] === 'object'
         ? value['diagnostics'] as Record<string, unknown>
         : {};
-      return {
+      return this.withAuthority({
         ...value,
         evidence_items: scopedEvidence,
         graph_neighborhood: [],
@@ -1397,9 +1537,9 @@ export class KfdbKnowledgeClient {
           repo_scope_graph_only_dropped: dropped,
         },
         repo_resolution: repoResolution,
-      };
+      }, authorityHeaders);
     }
-    return { result, repo_resolution: repoResolution };
+    return this.withAuthority({ result, repo_resolution: repoResolution }, authorityHeaders);
   }
 
   private async resolveCodeRepoScope(raw: string): Promise<Record<string, unknown>> {
@@ -1508,6 +1648,17 @@ export function loadKfdbClientFromEnv(
     baseUrl,
     apiKey,
     walletAddress: env.KFDB_WALLET_ADDRESS?.trim() || env.X_WALLET_ADDRESS?.trim(),
+    requestWalletAddress: env.RICKYDATA_AUTH_WALLET_ADDRESS?.trim(),
     s2d,
+    requireS2D: Boolean(
+      env.RICKYDATA_AUTH_WALLET_ADDRESS?.trim()
+      || env.S2D_SESSION_ID?.trim()
+      || env.S2D_DERIVED_KEY?.trim()
+    ),
+    s2dProvenance: env.S2D_SESSION_ID?.trim()
+      ? 'delegated-static'
+      : env.KNOWLEDGE_MCP_PRIVATE_KEY?.trim()
+        ? 'legacy-wallet'
+        : 'injected',
   });
 }

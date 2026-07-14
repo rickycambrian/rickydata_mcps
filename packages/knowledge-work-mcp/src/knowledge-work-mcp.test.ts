@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildDiscoveryCapture, buildOpenQuestionCapture } from './atoms.js';
 import { ApiError, FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
-import { KfdbKnowledgeClient } from './kfdb-client.js';
+import { KfdbKnowledgeClient, RECENT_ACTIVITY_SOURCE_LABELS } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
 import { capKnowledgeBundleArgs, resolveNextQuestions, resolveReviewPending, resolveSessionBrief, resolveTrace, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, withAssertionVoiceAnswer } from './tools.js';
 
@@ -137,11 +137,14 @@ describe('KFDB read/write auth split', () => {
 
   it('projects exact recent activity with provenance, partial-source status, and a stable receipt', async () => {
     const rowsByLabel: Record<string, Array<Record<string, unknown>>> = {
-      RickydataCodeRun: [{
-        _id: 'code-run-1', run_id: 'code-run-1', task_slug: 'issue-rickydata-code-49', status: 'completed',
-        repo_id: 'rickydata_code', engine: 'codex', last_commit_sha: '457d238',
-        transcript: 'Completed and opened https://github.com/rickycambrian/rickydata_code/pull/79',
-        finished_at: '2026-07-13T11:05:00.000Z',
+      RickydataGitCommit: [{
+        _id: 'git-1', commit_sha: '457d238', repo_id: 'rickydata_home',
+        subject: 'Keep partner authority wallet-scoped', committed_at: '2026-07-13T11:05:00.000Z',
+      }],
+      RickydataDevelopmentEpisode: [{
+        _id: 'episode-1', episode_id: 'episode-1', commit_sha: '457d238', repo_id: 'rickydata_home',
+        title: 'Knowledge Partner authority', implementation_summary: 'Separated billing from data authority.',
+        occurred_at: '2026-07-13T11:06:00.000Z',
       }],
       RickydataChangeEvidence: [{
         _id: 'change-1', title: 'Partner authority landed', summary: 'Wallet-scoped MCP reads are live.',
@@ -183,7 +186,8 @@ describe('KFDB read/write auth split', () => {
       RickydataLessonVideo: [{ _id: 'published-video-1', lesson_id: 'lesson-7', published_at: '2026-07-13T11:42:00.000Z' }],
     };
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
-      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as { query?: string };
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as { query?: string; scope?: string };
+      expect(body.scope).toBe('private');
       const label = body.query?.match(/MATCH \(n:([^\)]+)\)/)?.[1] ?? '';
       if (label === 'WikiPage') return jsonResponse({ error: 'temporary source outage' }, { status: 503 });
       return jsonResponse({ data: rowsByLabel[label] ?? [] });
@@ -200,7 +204,7 @@ describe('KFDB read/write auth split', () => {
 
     expect(result).toMatchObject({
       window: { from: '2026-07-12T12:00:00.000Z', to: '2026-07-13T12:00:00.000Z', hours: 24 },
-      counts: { DEV: 2, PROOF: 1, KNOWLEDGE: 1, LEARN: 1, MEDIA: 2 },
+      counts: { DEV: 3, PROOF: 1, KNOWLEDGE: 1, LEARN: 1, MEDIA: 2 },
       complete: false,
       curriculum: { course_count: 1, lesson_count: 1, playable_video_lessons: 1 },
     });
@@ -208,10 +212,8 @@ describe('KFDB read/write auth split', () => {
       expect.objectContaining({ kind: 'DEV', source: expect.objectContaining({ label: 'RickydataChangeEvidence', id: 'change-1' }), commit_sha: '607c4c491' }),
       expect.objectContaining({
         kind: 'DEV',
-        title: 'issue-rickydata-code-49',
-        status: 'completed',
-        pr_url: 'https://github.com/rickycambrian/rickydata_code/pull/79',
-        source: expect.objectContaining({ label: 'RickydataCodeRun', id: 'code-run-1' }),
+        title: 'Keep partner authority wallet-scoped',
+        source: expect.objectContaining({ label: 'RickydataGitCommit', id: 'git-1' }),
         commit_sha: '457d238',
       }),
       expect.objectContaining({ kind: 'LEARN', source: expect.objectContaining({ label: 'RickydataLearningDraft', id: 'draft-1' }), course_slug: 'verification-claims' }),
@@ -229,6 +231,31 @@ describe('KFDB read/write auth split', () => {
     expect(result['reproducibility_hash']).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it('uses the exact same 20-source registry as the learner Pulse projection', () => {
+    expect(RECENT_ACTIVITY_SOURCE_LABELS).toEqual([
+      'RickydataGitCommit',
+      'RickydataDevelopmentEpisode',
+      'RickydataDailyLearningBrief',
+      'EvidenceRecord',
+      'RickydataChangeEvidence',
+      'RickydataWikiCompilerRun',
+      'WikiPage',
+      'RickydataCourse',
+      'RickydataLearningJob',
+      'RickydataLessonVideo',
+      'RickydataCourseAudio',
+      'RickydataLearningDraft',
+      'RickydataVideoBrief',
+      'RickydataLesson',
+      'RickydataLessonProgress',
+      'RickydataFeedComment',
+      'RickydataLearningChallenge',
+      'RickydataAnswerFeedback',
+      'RickydataContentCandidate',
+      'RickydataContentJob',
+    ]);
+  });
+
   it('caps broad knowledge bundles before they can spill into engine result files', () => {
     expect(capKnowledgeBundleArgs({
       token_budget: 32000,
@@ -241,7 +268,7 @@ describe('KFDB read/write auth split', () => {
     });
   });
 
-  it('allows knowledge reads without S2D headers so KFDB can report honest diagnostics', async () => {
+  it('fails closed before private reads when delegated S2D authority is unavailable', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({
         pages: [],
@@ -256,15 +283,42 @@ describe('KFDB read/write auth split', () => {
       apiKey: 'key',
       walletAddress: '0xb3e6',
       s2d: null,
+      requireS2D: true,
       fetchImpl,
     });
 
-    await expect(kfdb.knowledgeBundle({ token_budget: 2500 })).resolves.toMatchObject({
-      diagnostics: { s2d_active: false, undecrypted_skipped: 12 },
+    await expect(kfdb.knowledgeBundle({ token_budget: 2500 })).rejects.toThrow(/sign-to-derive.*private read/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('rejects a delegated wallet that differs from the gateway request wallet', async () => {
+    const { StaticS2DProvider } = await import('./s2d.js');
+    expect(() => new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      walletAddress: '0x1111111111111111111111111111111111111111',
+      requestWalletAddress: '0x2222222222222222222222222222222222222222',
+      s2d: new StaticS2DProvider('session-abc', 'a'.repeat(64), '0x1111111111111111111111111111111111111111'),
+      requireS2D: true,
+    })).toThrow(/wallet authority mismatch/i);
+  });
+
+  it('rejects ciphertext instead of silently projecting an empty private graph', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      pages: [{ title: { String: '__enc_v1_foreign_ciphertext' } }],
+      claims: [],
+      open_questions: [],
+    }));
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      walletAddress: '0xb3e6',
+      s2d: {
+        ensure: async () => ({ sessionId: 's2d-session', keyHex: 'a'.repeat(64), walletAddress: '0xb3e6' }),
+      },
+      requireS2D: true,
+      fetchImpl,
     });
-    const init = fetchImpl.mock.calls[0]![1] as RequestInit;
-    expect(init.headers).toMatchObject({ authorization: 'Bearer key', 'x-wallet-address': '0xb3e6' });
-    expect(init.headers).not.toHaveProperty('x-derive-session-id');
+
+    await expect(kfdb.knowledgeBundle({ token_budget: 2500 })).rejects.toThrow(/ciphertext boundary violation/i);
   });
 
   it('retries one transient KFDB read failure', async () => {
@@ -613,7 +667,7 @@ describe('KFDB read/write auth split', () => {
     const kfdb = new KfdbKnowledgeClient({
       baseUrl: 'https://kfdb.test',
       apiKey: 'key',
-      walletAddress: '0xbad',
+      walletAddress: '0xb3e6',
       s2d: {
         ensure: async () => ({ sessionId: 's2d-session', keyHex: 'abc123', walletAddress: '0xb3e6' }),
       },
@@ -825,6 +879,12 @@ describe('KFDB read/write auth split', () => {
       citation: { pageSlug: 'agentic-knowledge-compiler', claimId: 'claim:target', verified: true },
       page: { slug: 'agentic-knowledge-compiler', title: 'The Agentic Knowledge Compiler' },
       fallback: { source: 'kfdb_trace' },
+      authority: {
+        effective_wallet_address: '0xb3e6',
+        tenant_scope: 'wallet-private',
+        query_scope: 'private',
+        credential_type: 'kfdb-api-key',
+      },
     });
     const trace = await kfdb.trace('wiki-claim', 'evidence:akc-p10-code-integration:build:50cb7f') as {
       page?: Record<string, unknown>;
@@ -1388,11 +1448,19 @@ describe('static S2D provider (keyless delegation)', () => {
       s2d: new StaticS2DProvider('session-abc', 'c'.repeat(64), '0x2222222222222222222222222222222222222222'),
       fetchImpl,
     });
-    await kfdb.knowledgeBundle({ query: 'test' });
+    const result = await kfdb.knowledgeBundle({ query: 'test' }) as Record<string, unknown>;
     const headers = fetchImpl.mock.calls[0][1]?.headers as Record<string, string>;
     expect(headers['x-derive-session-id']).toBe('session-abc');
     expect(headers['x-derive-key']).toBe('c'.repeat(64));
     expect(headers['x-wallet-address']).toBe('0x2222222222222222222222222222222222222222');
+    expect(result['authority']).toMatchObject({
+      effective_wallet_address: '0x2222222222222222222222222222222222222222',
+      tenant_scope: 'wallet-private',
+      query_scope: 'private',
+      credential_type: 'kfdb-s2d-session',
+    });
+    expect(JSON.stringify(result)).not.toContain('c'.repeat(64));
+    expect(JSON.stringify(result)).not.toContain('session-abc');
   });
 
   it('constructs the KFDB client from delegated S2D credentials without a legacy API key', async () => {
