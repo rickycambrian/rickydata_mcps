@@ -12,7 +12,7 @@ Test and deploy `@rickydata/knowledge-work-mcp` without weakening its voice late
 
 ## Verified
 
-2026-07-13
+2026-07-14
 
 ## Setup/Prerequisites
 
@@ -34,20 +34,54 @@ Refresh the source-backed production registration after a tested commit:
 
 ```bash
 gh workflow run publish-knowledge-work-mcp.yml \
+  --repo rickycambrian/rickydata_mcps \
   --ref main \
-  -f refresh_source=true \
-  -f skip_version_bump=true
+  -f refresh_source=true
 ```
 
-The workflow's blocking `Verify production source commit` step polls the public MCP registration until its source commit equals the dispatched Git SHA and the server exposes exactly 16 tools. Treat a green workflow as the production receipt; do not infer success from the registry write alone.
+The workflow's blocking `Verify production source commit` step polls the public MCP registration until its source commit equals the dispatched Git SHA and the server exposes exactly 16 tools. Treat a green workflow as the production receipt; do not infer success from the registry write alone. Verified 2026-07-14 by workflow run `29369870079` against commit `9464ba9a`.
+
+Check the non-secret production registration fields:
+
+```bash
+curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e22d \
+  | jq '{id,name,version,status,toolsCount,lastEnrichedCommitSha}'
+```
+
+## Private Authority Contract
+
+- Every private tool call must expose redacted authority metadata showing the
+  effective wallet equals the requester wallet, `tenant:"wallet-private"`,
+  `query_scope:"private"`, credential type `kfdb-s2d-session`, and the KFDB
+  endpoint. Fingerprints and provenance are safe; raw JWTs, S2D sessions,
+  wallet tokens, signatures, and ciphertext are not.
+- Delegated authority must remain requester-scoped from the browser capability
+  through the gateway session and attached MCP. Never substitute an operator or
+  service wallet and never silently fall back to global scope.
+- Private graph reads obey the KFDB law: `MATCH (n:Label) RETURN n.* LIMIT k`
+  with `{scope:'private'}`. Apply timestamps, ids, joins, and filters after the
+  whole-label read in application code.
+- `session_brief` is payload-bounded to 8 pages, 20 claims, and 12 open
+  questions while remaining non-empty for a populated wallet graph.
+- Every `trace` outcome, including route-unavailable fallback branches, must
+  carry independently revalidated KFDB authority metadata.
 
 ## Recent Activity Contract
 
 - `recent_activity` is the chronological path for questions such as “what happened recently?”; do not substitute semantic-search relevance for its rolling time window.
 - It scans append-stable PRIVATE graph receipts and returns separate DEV, PROOF, KNOWLEDGE, LEARN, and MEDIA counts, exact source ids/versions, active content jobs, current quality-passed recommendations, curriculum coverage, and `reproducibility_hash`.
+- It uses the same 20-source registry and rolling-window semantics as Learn
+  Pulse. The registry includes development, evidence, wiki, course, learning,
+  media, feedback, candidate, and content-job labels; count or source drift is a
+  verifier failure, not an intentional approximation.
 - Individual source failures remain explicit in `sources` and `omissions`; `complete:false` means missing counts are unknown, never zero.
 - Use `trace` or `code_context` to deepen the exact receipts returned by `recent_activity`.
-- Verified locally on 2026-07-13 with 55 package tests, TypeScript build, and a real stdio `tools/list` handshake returning 16 tools.
+- An exact `evidence:<id>` trace reads `EvidenceRecord` privately and returns an
+  honest EvidenceRecord plus `CommitReference` linked by
+  `EvidenceRecord.commit_sha`. Do not synthesize a `GitCommit` node that was not
+  read from the graph.
+- Verified locally on 2026-07-14 with 65 package tests and TypeScript build, and
+  in production with 16 tools and wallet-private EvidenceRecord tracing.
 
 ## Voice Contracts
 
@@ -63,9 +97,29 @@ The workflow's blocking `Verify production source commit` step polls the public 
 
 ### Source write succeeds but production remains stale
 
-- **Symptom:** the KFDB registration write succeeds, `POST /api/servers/<id>/stop` returns `{"status":"stopped"}`, but the single-server reload returns HTTP 401 `Invalid or expired session`; the public MCP record stays on the previous source commit.
-- **Cause:** the stored `OPERATOR_WALLET_TOKEN` can expire even though the stop route accepts it. The authenticated `/health/reload/<id>` route requires a current gateway session.
-- **Fix:** do not rotate the wallet or the stored secret. Mint a fresh short-lived session through the existing `/api/auth/challenge` → wallet `signMessage` → `/api/auth/verify` flow, call the single-server reload as the authenticated admin, and let the already-running workflow's blocking production-SHA poll prove convergence. Verified 2026-07-12: reload returned `status:"updated"`, 15 tools, and workflow run `29190873565` passed against commit `b4248ac32f4b866066ecd5128c77e52fffa6d9b1`.
+- **Symptom:** the KFDB registry write succeeds, but the single-server reload
+  returns HTTP 401 and the public MCP record stays on the previous source
+  commit.
+- **Cause:** a legacy expiring value in the existing
+  `OPERATOR_WALLET_TOKEN` GitHub Actions secret no longer authenticates the
+  admin reload. A registry write alone does not invalidate already-running
+  per-wallet MCP instances.
+- **Fix:** rotate that existing secret through the normal wallet-auth flow to a
+  long-lived self-verifying `mcpwt_` token, rerun the source-refresh workflow,
+  and require both the authenticated reload and blocking public source-SHA
+  check to pass. The reload must invalidate every wallet runtime instance and
+  the workflow must fail closed if it does not. Verified 2026-07-14 by failed
+  run `29364095971` followed by successful run `29369870079`.
+
+### Trace fallback loses private authority
+
+- **Symptom:** a successful private trace has authority metadata on its primary
+  path but omits it when the Home route or both trace sources are unavailable.
+- **Cause:** fallback results were returned before the KFDB session was
+  independently revalidated.
+- **Fix:** revalidate the delegated KFDB session before every fallback return,
+  stamp the same redacted authority object, and fail closed on a wallet or scope
+  mismatch.
 
 ### Semantic search is hydrated but leaks private body fields
 
@@ -93,5 +147,7 @@ The workflow's blocking `Verify production source commit` step polls the public 
 | Package build | TypeScript build passes |
 | Public tool count | 16 |
 | Production source | Exact dispatched Git SHA |
+| Private authority | Requester wallet, wallet-private tenant, private scope |
+| Session brief cap | 8 pages, 20 claims, 12 questions |
 | Broad voice bundle | 2500 tokens, 15 pages, 30 claims |
-| Trace verification | Exact claim ID and exact-claim result |
+| Evidence trace | Exact EvidenceRecord plus commit_sha CommitReference |
