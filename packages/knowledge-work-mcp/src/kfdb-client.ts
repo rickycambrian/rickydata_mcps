@@ -935,6 +935,10 @@ export class KfdbKnowledgeClient {
     };
   }
 
+  async authority(): Promise<Record<string, unknown>> {
+    return this.authorityMetadata(await this.headersWithOptionalS2D());
+  }
+
   private withAuthority(value: unknown, headers: Record<string, string>): unknown {
     const authority = this.authorityMetadata(headers);
     if (value && typeof value === 'object' && !Array.isArray(value)) {

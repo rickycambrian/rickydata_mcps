@@ -1175,6 +1175,30 @@ describe('KFDB read/write auth split', () => {
 });
 
 describe('trace fallback detection', () => {
+  it('preserves verified KFDB authority when an exact evidence trace falls back to Home', async () => {
+    const authority = {
+      effective_wallet_address: '0xb3e6',
+      tenant_scope: 'wallet-private',
+      query_scope: 'private',
+      credential_type: 'kfdb-s2d-session',
+      session_id_provenance: 'delegated-grant',
+    };
+    const home = { trace: vi.fn(async () => ({
+      nodes: [{ id: 'evidence-1', type: 'EvidenceRecord' }, { id: 'page-1', type: 'WikiPage' }],
+    })) };
+    const kfdb = {
+      trace: vi.fn(async () => { throw new Error('wiki claim trace not found'); }),
+      authority: vi.fn(async () => authority),
+    };
+
+    await expect(resolveTrace(home, kfdb, 'wiki-claim', 'evidence:evidence-1', 5)).resolves.toMatchObject({
+      nodes: [{ id: 'evidence-1' }, { id: 'page-1' }],
+      authority,
+      kfdb_trace_error: 'wiki claim trace not found',
+    });
+    expect(kfdb.authority).toHaveBeenCalledOnce();
+  });
+
   it('returns a structured KFDB fallback when the Home trace route times out', async () => {
     const home = { trace: vi.fn(() => new Promise<unknown>(() => undefined)) };
     const kfdb = { trace: vi.fn(async () => ({ kind: 'wiki-page', id: 'agentic-knowledge-compiler', title: 'Agentic Knowledge Compiler' })) };

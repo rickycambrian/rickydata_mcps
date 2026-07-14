@@ -41,6 +41,7 @@ interface ReviewPendingReader {
 
 interface TraceReader {
   trace(kind: string, id: string): Promise<unknown>;
+  authority?(): Promise<Record<string, unknown>>;
 }
 
 interface SessionBriefReader {
@@ -135,6 +136,14 @@ function routeUnavailableTrace(
     home_error: errorMessage(homeError),
     ...(fallbackError !== undefined ? { fallback_error: errorMessage(fallbackError) } : {}),
   };
+}
+
+async function withTraceAuthority(trace: unknown, kfdb: TraceReader | null): Promise<unknown> {
+  if (!trace || typeof trace !== 'object' || Array.isArray(trace)) return trace;
+  const value = trace as Record<string, unknown>;
+  if (value['authority'] && typeof value['authority'] === 'object') return trace;
+  if (!kfdb?.authority) return trace;
+  return { ...value, authority: await kfdb.authority() };
 }
 
 export async function resolveNextQuestions(
@@ -401,7 +410,10 @@ export async function resolveTrace(
     } catch (kfdbError) {
       try {
         return {
-          ...(withAssertionVoiceAnswer(kind, id, await readTraceWithin(home, kind, id, homeTimeoutMs)) as Record<string, unknown>),
+          ...(await withTraceAuthority(
+            withAssertionVoiceAnswer(kind, id, await readTraceWithin(home, kind, id, homeTimeoutMs)),
+            kfdb,
+          ) as Record<string, unknown>),
           kfdb_trace_error: errorMessage(kfdbError),
         };
       } catch (homeError) {
@@ -411,7 +423,10 @@ export async function resolveTrace(
   }
 
   try {
-    const homeTrace = withAssertionVoiceAnswer(kind, id, await readTraceWithin(home, kind, id, homeTimeoutMs));
+    const homeTrace = await withTraceAuthority(
+      withAssertionVoiceAnswer(kind, id, await readTraceWithin(home, kind, id, homeTimeoutMs)),
+      kfdb,
+    );
     if (!shouldUseKfdbTraceFallback(homeTrace)) return homeTrace;
 
     const homeValue = homeTrace as Record<string, unknown>;
