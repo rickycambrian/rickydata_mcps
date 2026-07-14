@@ -106,6 +106,13 @@ describe('KFDB read/write auth split', () => {
     };
 
     await expect(resolveSessionBrief(reader)).resolves.toBe(bundle);
+    expect(reader.knowledgeBundle).toHaveBeenCalledWith({
+      token_budget: 2500,
+      page_limit: 8,
+      claim_limit: 20,
+      include_questions: true,
+      question_limit: 12,
+    });
     expect(reader.recentActivity).not.toHaveBeenCalled();
   });
 

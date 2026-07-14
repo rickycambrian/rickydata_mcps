@@ -46,7 +46,10 @@ interface TraceReader {
 interface SessionBriefReader {
   knowledgeBundle(input: {
     token_budget: number;
+    page_limit: number;
+    claim_limit: number;
     include_questions: boolean;
+    question_limit: number;
   }): Promise<unknown>;
   recentActivity(input: { hours: number; limit: number }): Promise<unknown>;
 }
@@ -59,7 +62,10 @@ export async function resolveSessionBrief(kfdb: SessionBriefReader): Promise<unk
   try {
     return await kfdb.knowledgeBundle({
       token_budget: 2500,
+      page_limit: 8,
+      claim_limit: 20,
       include_questions: true,
+      question_limit: 12,
     });
   } catch {
     const recent = await kfdb.recentActivity({ hours: 24, limit: 24 });
