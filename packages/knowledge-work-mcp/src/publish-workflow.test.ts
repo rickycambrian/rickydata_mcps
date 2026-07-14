@@ -35,4 +35,13 @@ describe('knowledge-work-mcp publish workflow', () => {
     expect(workflow).toContain('with 16 tools');
     expect(workflow).toContain('exit 1');
   });
+
+  it('uses the verified source-backed lane when the npm package is not yet bootstrapped', () => {
+    expect(workflow).toContain('id: distribution');
+    expect(workflow).toContain('npm_available=false');
+    expect(workflow).toContain("steps.distribution.outputs.npm_available == 'true'");
+    expect(workflow).toContain("steps.distribution.outputs.npm_available != 'true'");
+    expect(workflow).toContain("if: steps.registry.outputs.type == 'git'");
+    expect(workflow).toContain('Registering source-backed knowledge-work-mcp');
+  });
 });
