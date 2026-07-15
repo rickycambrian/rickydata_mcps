@@ -1120,6 +1120,42 @@ describe('KFDB read/write auth split', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('distinguishes an empty topic match from an empty OpenQuestion queue', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+      if (String(url).endsWith('/api/v1/agent/knowledge')) {
+        return jsonResponse({
+          open_questions: [{
+            id: 'oq-core2',
+            question: 'Which commit last streamed from the Core2 device?',
+            why_it_matters: 'Blocks the device proof.',
+            status: 'open',
+          }],
+          diagnostics: { scanned_questions: 9053 },
+          reproducibility_hash: 'topic-hash',
+        });
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.nextQuestions({ topic: 'agentic-knowledge-compiler', limit: 3 })).resolves.toMatchObject({
+      ranked: [],
+      total_ranked: 0,
+      fallback: {
+        total_open: 1,
+        topic: 'agentic-knowledge-compiler',
+        topic_matches: 0,
+        retry_hint: 'Omit topic to request the global highest-value ranking.',
+      },
+    });
+  });
+
   it('projects pending WikiDiffs ahead of OpenQuestions for review_pending', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url) => {
       if (String(url).endsWith('/api/v1/query')) {

@@ -1485,9 +1485,10 @@ export class KfdbKnowledgeClient {
     }) as KnowledgeBundle;
     const questionRows = Array.isArray(bundle.open_questions) ? bundle.open_questions : [];
     const topic = input.topic?.trim().toLowerCase();
-    const questions = questionRows
+    const allQuestions = questionRows
       .map((row) => openQuestionOf(row, now))
-      .filter((q): q is OpenQuestionView => q !== null)
+      .filter((q): q is OpenQuestionView => q !== null);
+    const questions = allQuestions
       .filter((q) => !topic || JSON.stringify(q).toLowerCase().includes(topic));
     const items: RoadmapItemRow[] = [];
     const ranked = rankOpenQuestions(questions, items);
@@ -1498,7 +1499,12 @@ export class KfdbKnowledgeClient {
       fallback: {
         source: 'kfdb_agent_knowledge',
         reason: 'home next_questions unavailable or empty; ranked the optimized KFDB knowledge-bundle question projection',
-        total_open: questions.length,
+        total_open: allQuestions.length,
+        ...(topic ? {
+          topic: input.topic?.trim(),
+          topic_matches: questions.length,
+          retry_hint: 'Omit topic to request the global highest-value ranking.',
+        } : {}),
         ranking: 'value = blocking x gap x freshness x answerability; blocking and gap default to baseline in MCP fallback',
         diagnostics: bundle.diagnostics ?? {},
         reproducibility_hash: bundle.reproducibility_hash,

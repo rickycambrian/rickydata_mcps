@@ -703,7 +703,9 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     'next_questions',
     'Read the SPEC-021 ranked OpenQuestion feed with value breakdown and Mom-Test rewrite hints.',
     {
-      topic: z.string().optional().describe('Optional topic filter.'),
+      topic: z.string().optional().describe(
+        'Optional topic filter. Omit this field for global requests such as "highest-value", "what should we answer next", or "what is most important"; only set it when the user explicitly names a topic.',
+      ),
       limit: z.number().int().min(1).max(10).optional().default(3),
     },
     async ({ topic, limit }) => {
