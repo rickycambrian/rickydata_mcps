@@ -481,6 +481,48 @@ describe('KFDB read/write auth split', () => {
     expect(serialized).not.toContain('must not escape the safe projection');
   });
 
+  it('bounds transcript-like semantic titles without dropping the full safe summary signal', async () => {
+    const question = `Detached pump details ${'x'.repeat(260)}?`;
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      results: [{
+        id: 'embedding-noisy-question',
+        labels: ['OpenQuestion'],
+        similarity: 0.71,
+        properties: {
+          entity_label: 'OpenQuestion',
+          file_path: 'OpenQuestion://33333333-3333-4333-8333-333333333333',
+        },
+        entity: {
+          _id: '33333333-3333-4333-8333-333333333333',
+          question,
+          answer: 'The automatic mirror now runs after every completed turn.',
+        },
+      }],
+      total_hits: 1,
+      took_ms: 4,
+    }));
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    const response = await kfdb.semanticSearch({
+      query: 'automatic mirror',
+      labels: ['OpenQuestion'],
+      minSimilarity: 0.45,
+      limit: 8,
+    }) as { labels: Array<{ result: { results: Array<Record<string, unknown>> } }> };
+    const hit = response.labels[0]?.result.results[0];
+
+    expect(hit?.title).toBe(`${question.slice(0, 159)}…`);
+    expect(String(hit?.title)).toHaveLength(160);
+    expect(hit?.summary).toBe('The automatic mirror now runs after every completed turn.');
+    expect(hit?.title_truncated).toBe(true);
+  });
+
   it('resolves human repository names before requesting scoped code context', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
       if (String(url).endsWith('/api/v1/import/github')) {

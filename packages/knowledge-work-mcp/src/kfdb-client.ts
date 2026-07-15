@@ -320,6 +320,12 @@ function semanticNodeId(filePath: string, entity: Record<string, unknown>): stri
   return uriTarget || '';
 }
 
+function boundedSemanticTitle(value: string, maxLength = 160): { title: string; truncated: boolean } {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return { title: normalized, truncated: false };
+  return { title: `${normalized.slice(0, maxLength - 1)}…`, truncated: true };
+}
+
 function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string, unknown> {
   const value = hit && typeof hit === 'object' ? hit as Record<string, unknown> : {};
   const properties = value['properties'] && typeof value['properties'] === 'object'
@@ -344,7 +350,8 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
     'question',
     'text',
   ]);
-  const title = sourceTitle || `${entityLabel} ${slug || 'result'}`;
+  const titleProjection = boundedSemanticTitle(sourceTitle || `${entityLabel} ${slug || 'result'}`);
+  const title = titleProjection.title;
   const summary = (sourceSummary || title).replace(/\s+/g, ' ').trim().slice(0, 200);
   return {
     node_id: nodeId,
@@ -357,6 +364,7 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
     title,
     summary,
     slug,
+    ...(titleProjection.truncated ? { title_truncated: true } : {}),
     ...(sourceTitle || sourceSummary ? {} : { content_null: true }),
   };
 }

@@ -66,6 +66,11 @@ The package intentionally exposes exactly 16 tools:
 15. `review_pending`
 16. `resolve_item`
 
+`semantic_search` safe-projects hydrated private entities. Readable hits expose
+compact `title`, `summary`, and `slug` fields; transcript-like titles are capped
+at 160 characters and marked with `title_truncated: true` so noisy source atoms
+cannot dominate the model context.
+
 ## Development
 
 ```bash
