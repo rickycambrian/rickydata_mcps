@@ -1512,6 +1512,18 @@ export class KfdbKnowledgeClient {
       globalQueueDiagnostics = globalBundle.diagnostics;
       globalQueueReproducibilityHash = globalBundle.reproducibility_hash;
     }
+    const queueDiagnostics = (globalQueueDiagnostics ?? bundle.diagnostics) as Record<string, unknown> | undefined;
+    const queueSources = queueDiagnostics?.['sources'];
+    const questionSource = queueSources && typeof queueSources === 'object'
+      ? (queueSources as Record<string, unknown>)['questions']
+      : undefined;
+    const questionSourceRecord = questionSource && typeof questionSource === 'object'
+      ? questionSource as Record<string, unknown>
+      : undefined;
+    const prunedQuestions = typeof queueDiagnostics?.['pruned_questions'] === 'number'
+      ? queueDiagnostics['pruned_questions']
+      : null;
+    const queueProjectionComplete = questionSourceRecord?.['complete'] === true && prunedQuestions === 0;
 
     return {
       ranked: ranked.slice(0, input.limit),
@@ -1520,6 +1532,8 @@ export class KfdbKnowledgeClient {
         source: 'kfdb_agent_knowledge',
         reason: 'home next_questions unavailable or empty; ranked the optimized KFDB knowledge-bundle question projection',
         total_open: totalOpen,
+        queue_projection_complete: queueProjectionComplete,
+        total_open_is_lower_bound: !queueProjectionComplete,
         ...(topic ? {
           topic: input.topic?.trim(),
           topic_matches: questions.length,

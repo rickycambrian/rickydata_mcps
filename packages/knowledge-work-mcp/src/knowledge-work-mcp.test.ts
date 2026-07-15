@@ -1127,7 +1127,11 @@ describe('KFDB read/write auth split', () => {
         if (body.query) {
           return jsonResponse({
             open_questions: [],
-            diagnostics: { scanned_questions: 9053 },
+            diagnostics: {
+              scanned_questions: 9053,
+              pruned_questions: 8899,
+              sources: { questions: { complete: false } },
+            },
             reproducibility_hash: 'scoped-topic-hash',
           });
         }
@@ -1138,7 +1142,11 @@ describe('KFDB read/write auth split', () => {
             why_it_matters: 'Blocks the device proof.',
             status: 'open',
           }],
-          diagnostics: { scanned_questions: 9053 },
+          diagnostics: {
+            scanned_questions: 9053,
+              pruned_questions: 8899,
+              sources: { questions: { complete: false } },
+          },
           reproducibility_hash: 'topic-hash',
         });
       }
@@ -1157,6 +1165,8 @@ describe('KFDB read/write auth split', () => {
       total_ranked: 0,
       fallback: {
         total_open: 1,
+        queue_projection_complete: false,
+        total_open_is_lower_bound: true,
         topic: 'agentic-knowledge-compiler',
         topic_matches: 0,
         retry_hint: 'Omit topic to request the global highest-value ranking.',
