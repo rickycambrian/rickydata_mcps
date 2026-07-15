@@ -152,12 +152,17 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
   `total_open:0` even though the private graph has open questions.
 - **Cause:** the tool schema described `topic` only as optional and the fallback
   counted the post-filter rows as the whole queue.
-- **Fix:** tell the model to omit `topic` unless the user explicitly names one;
-  preserve the pre-filter count as `total_open`, and report `topic_matches`
-  plus a no-topic retry hint for scoped misses. Verified 2026-07-15 in
-  production at source commit `c491166` (workflow run `29430838008`): the
-  canonical-wallet agent called `next_questions` with only `limit:3` and read
-  111 ranked open questions.
+- **Fix:** tell the model to omit `topic` unless the user explicitly names one.
+  On a scoped miss, perform one unscoped queue projection, report
+  `topic_matches` plus a no-topic retry hint, and distinguish a complete count
+  from a lower bound with `queue_projection_complete` and
+  `total_open_is_lower_bound`. Successful KFDB fallbacks expose only a safe
+  Home error category, never raw authorization text. Verified 2026-07-15 in
+  production at source commit `bb57194` (workflow run `29432454592`): a
+  canonical-wallet global request omitted `topic` and returned 111 ranked
+  rows; a nonexistent explicit topic returned zero matches, at least 111
+  visible open questions, `total_open_is_lower_bound:true`, 8,899 pruned
+  question rows, and no raw Home-token error.
 
 ### Trace reports a known verified claim as unverified
 
