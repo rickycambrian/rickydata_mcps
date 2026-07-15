@@ -1492,6 +1492,26 @@ export class KfdbKnowledgeClient {
       .filter((q) => !topic || JSON.stringify(q).toLowerCase().includes(topic));
     const items: RoadmapItemRow[] = [];
     const ranked = rankOpenQuestions(questions, items);
+    let totalOpen = allQuestions.length;
+    let globalQueueDiagnostics: unknown;
+    let globalQueueReproducibilityHash: unknown;
+
+    if (topic && questions.length === 0) {
+      const globalBundle = await this.knowledgeBundle({
+        token_budget: 12000,
+        page_limit: 1,
+        claim_limit: 1,
+        include_questions: true,
+        question_limit: 500,
+      }) as KnowledgeBundle;
+      const globalQuestionRows = Array.isArray(globalBundle.open_questions) ? globalBundle.open_questions : [];
+      totalOpen = globalQuestionRows
+        .map((row) => openQuestionOf(row, now))
+        .filter((q): q is OpenQuestionView => q !== null)
+        .length;
+      globalQueueDiagnostics = globalBundle.diagnostics;
+      globalQueueReproducibilityHash = globalBundle.reproducibility_hash;
+    }
 
     return {
       ranked: ranked.slice(0, input.limit),
@@ -1499,11 +1519,15 @@ export class KfdbKnowledgeClient {
       fallback: {
         source: 'kfdb_agent_knowledge',
         reason: 'home next_questions unavailable or empty; ranked the optimized KFDB knowledge-bundle question projection',
-        total_open: allQuestions.length,
+        total_open: totalOpen,
         ...(topic ? {
           topic: input.topic?.trim(),
           topic_matches: questions.length,
           retry_hint: 'Omit topic to request the global highest-value ranking.',
+          ...(questions.length === 0 ? {
+            global_queue_diagnostics: globalQueueDiagnostics ?? {},
+            global_queue_reproducibility_hash: globalQueueReproducibilityHash,
+          } : {}),
         } : {}),
         ranking: 'value = blocking x gap x freshness x answerability; blocking and gap default to baseline in MCP fallback',
         diagnostics: bundle.diagnostics ?? {},

@@ -1121,8 +1121,16 @@ describe('KFDB read/write auth split', () => {
   });
 
   it('distinguishes an empty topic match from an empty OpenQuestion queue', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
       if (String(url).endsWith('/api/v1/agent/knowledge')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { query?: string };
+        if (body.query) {
+          return jsonResponse({
+            open_questions: [],
+            diagnostics: { scanned_questions: 9053 },
+            reproducibility_hash: 'scoped-topic-hash',
+          });
+        }
         return jsonResponse({
           open_questions: [{
             id: 'oq-core2',
@@ -1154,6 +1162,7 @@ describe('KFDB read/write auth split', () => {
         retry_hint: 'Omit topic to request the global highest-value ranking.',
       },
     });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it('projects pending WikiDiffs ahead of OpenQuestions for review_pending', async () => {
