@@ -121,7 +121,9 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - `trace` verifies an exact claim from an exact-claim-text bundle. A page-slug bundle can omit the target claim and must not be used to infer that the claim is unverified.
 - `trace` must never reject the MCP tool call because the Home trace route is slow or unavailable. Bound the Home request and return `status:"route_unavailable"`, `fallback:"kfdb_trace"`, the subject, and any best-effort KFDB payload as a successful tool result.
 - `semantic_search` requests `include_entities:true`, then immediately safe-projects each encrypted result. Every readable hit carries first-class `title`, `summary` (whitespace-normalized, at most 200 characters), and `slug`; never return the hydrated entity or full wiki body.
+- Bound `title` to 160 characters and return `title_truncated:true` when the safe source label exceeded that limit. A safe projection must stay voice-sized even when legacy encrypted nodes stored claim text in `entity_label`.
 - Preserve the distinction between the hydrated node `_id` and the semantic result's embedding id. Return them as `node_id` and `embedding_id`; do not overwrite the stable node identity with the embedding identity.
+- Verified in production on 2026-07-15 at exact source commit `731ac694b7ab2de9e1c1e6ff021ff0ac332ce858`, package `0.1.15`: the canonical-wallet agent probe returned hydrated semantic hits with `title`, `summary`, and `slug`, observed bounded truncation, and completed a missing-page trace through the structured KFDB fallback without killing the MCP. Receipt: `/private/tmp/knowledge-partner-canonical-probe-2026-07-15T21-03-36.852Z.json`.
 
 ## Gotchas
 
@@ -156,6 +158,18 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - **Symptom:** adding `include_entities:true` fixes hollow hits but exposes encrypted wiki bodies or replaces the stable node id with the embedding id.
 - **Cause:** the raw semantic response is returned directly instead of being projected at the MCP boundary.
 - **Fix:** safe-project immediately after hydration, emit only the compact fields above, and test that `body_md` and the raw `entity` object are absent.
+
+### Semantic titles consume the voice context budget
+
+- **Symptom:** semantic hits have all required fields, but a legacy `WikiClaim`
+  label places an entire claim in `title`, inflating the model prompt and spoken
+  answer.
+- **Cause:** the safe projection bounded `summary` but treated every safe label
+  as an already compact title.
+- **Fix:** bound titles to 160 characters at the MCP boundary and expose
+  `title_truncated` so callers can distinguish a complete title from a compact
+  projection. Verified 2026-07-15 by the production canonical-wallet probe at
+  source commit `731ac694b7ab2de9e1c1e6ff021ff0ac332ce858`.
 
 ### A global next-question request returns an empty scoped queue
 
@@ -215,3 +229,5 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 | Evidence trace | Exact EvidenceRecord plus commit_sha CommitReference |
 | Recent-activity scan concurrency | At most 4 |
 | Production source refresh | Workflow `29440929663`, exact SHA `0c907c2d...` |
+| Semantic hit | title <= 160 chars, summary <= 200 chars, slug present |
+| Missing trace route | Structured `route_unavailable`/`kfdb_trace`; MCP stays alive |
