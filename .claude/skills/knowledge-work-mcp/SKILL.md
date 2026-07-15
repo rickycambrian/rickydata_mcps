@@ -12,7 +12,7 @@ Test and deploy `@rickydata/knowledge-work-mcp` without weakening its voice late
 
 ## Verified
 
-2026-07-14
+2026-07-15
 
 ## Setup/Prerequisites
 
@@ -144,6 +144,20 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - **Symptom:** adding `include_entities:true` fixes hollow hits but exposes encrypted wiki bodies or replaces the stable node id with the embedding id.
 - **Cause:** the raw semantic response is returned directly instead of being projected at the MCP boundary.
 - **Fix:** safe-project immediately after hydration, emit only the compact fields above, and test that `body_md` and the raw `entity` object are absent.
+
+### A global next-question request returns an empty scoped queue
+
+- **Symptom:** the model adds a topic to a global “highest-value” request, the
+  scoped result is empty, and the fallback misleadingly reports
+  `total_open:0` even though the private graph has open questions.
+- **Cause:** the tool schema described `topic` only as optional and the fallback
+  counted the post-filter rows as the whole queue.
+- **Fix:** tell the model to omit `topic` unless the user explicitly names one;
+  preserve the pre-filter count as `total_open`, and report `topic_matches`
+  plus a no-topic retry hint for scoped misses. Verified 2026-07-15 in
+  production at source commit `c491166` (workflow run `29430838008`): the
+  canonical-wallet agent called `next_questions` with only `limit:3` and read
+  111 ranked open questions.
 
 ### Trace reports a known verified claim as unverified
 
