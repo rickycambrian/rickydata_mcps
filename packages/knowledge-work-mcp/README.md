@@ -19,6 +19,7 @@ second-brain tool surface over KFDB and rickydata_home:
 | `KFDB_API_KEY` | Required for KFDB tools | Bearer for KFDB API calls. |
 | `S2D_SESSION_ID` / `S2D_DERIVED_KEY` | Preferred for private KFDB data | Pre-minted, revocable sign-to-derive session credentials. Requires `KFDB_WALLET_ADDRESS`. |
 | `KFDB_WALLET_ADDRESS` | Optional | Wallet tenant header when no private key is available. With `KNOWLEDGE_MCP_PRIVATE_KEY`, the S2D wallet address is used. |
+| `MCP_SOURCE_COMMIT_SHA` | Platform-injected | Exact reviewed git object ID baked into a source-backed runtime image. Invalid values are ignored. |
 | `RESPONSE_MAX_LENGTH` | Optional | Tool response cap, default `120000` chars. |
 
 ## Auth law
@@ -36,6 +37,13 @@ second-brain tool surface over KFDB and rickydata_home:
   receipts alongside rickydata_git change evidence. A completed run can carry
   its commit and canonical GitHub PR URL, but it remains DEV activity—not proof;
   only commit-pinned `EvidenceRecord` rows enter the PROOF category.
+
+## Runtime proof
+
+Every success and structured failure starts with a `runtime_identity` object
+containing the package version and `source_commit`. A null source commit means
+the serving process was not given a valid reviewed git revision; registry
+metadata alone must not be treated as proof of the code serving a tool call.
 
 ## Tools
 

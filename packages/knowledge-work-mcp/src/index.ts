@@ -7,10 +7,11 @@ import { loadSignerFromEnv } from './wallet-token.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { loadKfdbClientFromEnv } from './kfdb-client.js';
 import { loadS2DProviderFromEnv, StaticS2DProvider } from './s2d.js';
+import { getRuntimeIdentity, PACKAGE_VERSION } from './runtime-identity.js';
 
 const server = new McpServer({
   name: 'knowledge-work-mcp',
-  version: '0.1.0',
+  version: PACKAGE_VERSION,
 });
 
 const env = process.env;
@@ -49,6 +50,7 @@ async function main() {
       res.json({
         status: 'ok',
         server: 'knowledge-work-mcp',
+        runtime_identity: getRuntimeIdentity(),
         home_configured: Boolean(homeGatewayJwt || signer),
         home_auth_mode: homeGatewayJwt ? 'gateway-jwt' : signer ? 'wallet-key' : null,
         kfdb_configured: Boolean(kfdb),

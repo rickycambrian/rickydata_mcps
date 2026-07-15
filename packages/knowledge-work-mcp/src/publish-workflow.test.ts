@@ -40,7 +40,10 @@ describe('knowledge-work-mcp publish workflow', () => {
     const syncStep = workflow.match(
       /- name: Sync server in MCP gateway \(instant single-entity refresh\)([\s\S]*?)(?=\n      - name:)/,
     )?.[1] ?? '';
-    expect(syncStep).toContain('"updated"');
+    expect(syncStep).toContain("jq -r '.status // empty'");
+    expect(syncStep).toContain("jq -r '.invalidatedInstances // empty'");
+    expect(syncStep).toContain('[ "$STATUS" = "updated" ]');
+    expect(syncStep).toContain('[[ "$INVALIDATED" =~ ^[0-9]+$ ]]');
     expect(syncStep).toContain('::error::MCP gateway single-server reload failed');
     expect(syncStep).toContain('exit 1');
     expect(syncStep).not.toContain('will pick up on next 10-min cycle');

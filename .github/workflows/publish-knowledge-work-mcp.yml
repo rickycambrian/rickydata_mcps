@@ -244,10 +244,12 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
             -H "Content-Type: application/json" || echo '{"error":"sync failed"}')
           echo "Gateway sync: $RESPONSE"
-          if echo "$RESPONSE" | grep -q '"updated"'; then
-            echo "::notice::MCP gateway synced knowledge-work-mcp v${{ steps.ver.outputs.version }}"
+          STATUS=$(printf '%s' "$RESPONSE" | jq -r '.status // empty' 2>/dev/null || true)
+          INVALIDATED=$(printf '%s' "$RESPONSE" | jq -r '.invalidatedInstances // empty' 2>/dev/null || true)
+          if [ "$STATUS" = "updated" ] && [[ "$INVALIDATED" =~ ^[0-9]+$ ]]; then
+            echo "::notice::MCP gateway synced knowledge-work-mcp v${{ steps.ver.outputs.version }} and invalidated $INVALIDATED wallet runtime instance(s)"
           else
-            echo "::error::MCP gateway single-server reload failed; registry metadata is not runtime proof"
+            echo "::error::MCP gateway single-server reload failed to prove wallet runtime invalidation; registry metadata is not runtime proof"
             exit 1
           fi
 
