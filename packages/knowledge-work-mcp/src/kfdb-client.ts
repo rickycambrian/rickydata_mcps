@@ -634,8 +634,13 @@ type RecentActivitySource = {
 type RecentActivitySourceSpec = {
   label: string;
   limit: number;
+  /** Narrow large labels to properties consumed by this projection so KFDB
+   * does not decrypt and return unrelated private fields. */
+  fields?: readonly string[];
   events?: (row: Record<string, unknown>) => RecentActivityEvent[];
 };
+
+const RECENT_ACTIVITY_SOURCE_CONCURRENCY = 4;
 
 function parseJson<T>(value: string, fallback: T): T {
   if (!value) return fallback;
@@ -691,6 +696,10 @@ function activityEvent(
 const RECENT_ACTIVITY_SOURCES: RecentActivitySourceSpec[] = [
   {
     label: 'RickydataGitCommit', limit: 20_000,
+    fields: [
+      '_id', 'commit_sha', 'repo_id', 'committed_at', 'authored_at',
+      'last_attributed_at', 'subject', 'message',
+    ],
     events: (row) => {
       const sha = str(row, 'commit_sha');
       const repo = str(row, 'repo_id');
@@ -1071,9 +1080,14 @@ export class KfdbKnowledgeClient {
     const fromMs = now.getTime() - hours * 60 * 60_000;
     const from = new Date(fromMs).toISOString();
 
-    const reads = await Promise.all(RECENT_ACTIVITY_SOURCES.map(async (source) => {
+    const scan = async (source: RecentActivitySourceSpec) => {
       try {
-        const rows = (await this.queryKql(`MATCH (n:${source.label}) RETURN n.* LIMIT ${source.limit}`)).map(unwrapRow);
+        const projection = source.fields?.length
+          ? source.fields.map((field) => `n.${field} AS ${field}`).join(', ')
+          : 'n.*';
+        const rows = (await this.queryKql(
+          `MATCH (n:${source.label}) RETURN ${projection} LIMIT ${source.limit}`,
+        )).map(unwrapRow);
         const events = (source.events ? rows.flatMap(source.events) : [])
           .filter((event) => {
             const occurredAt = Date.parse(event.occurred_at);
@@ -1109,7 +1123,21 @@ export class KfdbKnowledgeClient {
         };
         return { label: source.label, rows: [] as Record<string, unknown>[], events: [] as RecentActivityEvent[], status };
       }
-    }));
+    };
+    const reads = new Array<Awaited<ReturnType<typeof scan>>>(RECENT_ACTIVITY_SOURCES.length);
+    let sourceCursor = 0;
+    const worker = async () => {
+      for (;;) {
+        const index = sourceCursor;
+        sourceCursor += 1;
+        if (index >= RECENT_ACTIVITY_SOURCES.length) return;
+        reads[index] = await scan(RECENT_ACTIVITY_SOURCES[index]!);
+      }
+    };
+    await Promise.all(Array.from(
+      { length: Math.min(RECENT_ACTIVITY_SOURCE_CONCURRENCY, RECENT_ACTIVITY_SOURCES.length) },
+      () => worker(),
+    ));
 
     const rowsFor = (label: string): Record<string, unknown>[] => reads.find((read) => read.label === label)?.rows ?? [];
     const byId = new Map<string, RecentActivityEvent>();

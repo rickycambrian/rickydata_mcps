@@ -263,6 +263,36 @@ describe('KFDB read/write auth split', () => {
     ]);
   });
 
+  it('bounds recent activity scans and projects only consumed Git commit fields', async () => {
+    let active = 0;
+    let peak = 0;
+    const queries: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as { query?: string; scope?: string };
+      expect(body.scope).toBe('private');
+      queries.push(body.query ?? '');
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      active -= 1;
+      return jsonResponse({ data: [] });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test', apiKey: 'key', walletAddress: '0xb3e6', s2d: null, fetchImpl,
+    });
+
+    await kfdb.recentActivity({
+      now: new Date('2026-07-13T12:00:00.000Z'),
+    });
+
+    expect(peak).toBe(4);
+    expect(queries).toHaveLength(RECENT_ACTIVITY_SOURCE_LABELS.length);
+    const gitCommit = queries.find((query) => query.startsWith('MATCH (n:RickydataGitCommit)'));
+    expect(gitCommit).toBe(
+      'MATCH (n:RickydataGitCommit) RETURN n._id AS _id, n.commit_sha AS commit_sha, n.repo_id AS repo_id, n.committed_at AS committed_at, n.authored_at AS authored_at, n.last_attributed_at AS last_attributed_at, n.subject AS subject, n.message AS message LIMIT 20000',
+    );
+  });
+
   it('caps broad knowledge bundles before they can spill into engine result files', () => {
     expect(capKnowledgeBundleArgs({
       token_budget: 32000,
