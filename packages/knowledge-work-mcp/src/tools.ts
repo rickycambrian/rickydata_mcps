@@ -20,8 +20,16 @@ function requireKfdb(client: KfdbKnowledgeClient | null): KfdbKnowledgeClient {
 }
 
 function fallbackReason(err: unknown): Record<string, unknown> {
+  const message = err instanceof Error ? err.message : String(err);
+  const normalized = message.toLowerCase();
+  const category = /\b401\b|invalid or expired token|unauthori[sz]ed/.test(normalized)
+    ? 'authorization_unavailable'
+    : /timed?\s*out|timeout/.test(normalized)
+      ? 'timeout'
+      : 'route_unavailable';
   return {
-    home_error: err instanceof Error ? err.message : String(err),
+    home_status: 'route_unavailable',
+    home_error_category: category,
   };
 }
 

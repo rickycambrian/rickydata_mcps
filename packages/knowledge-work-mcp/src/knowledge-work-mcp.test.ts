@@ -1257,6 +1257,30 @@ describe('KFDB read/write auth split', () => {
     expect(kfdb.nextQuestions).toHaveBeenCalledWith({ topic: 'Core2', limit: 3 });
   });
 
+  it('redacts raw Home authorization errors when the KFDB question fallback succeeds', async () => {
+    const home = {
+      nextQuestions: vi.fn(async () => {
+        throw new Error('home API 401: {"error":"Invalid or expired token"}');
+      }),
+    };
+    const kfdb = {
+      nextQuestions: vi.fn(async () => ({
+        ranked: [{ id: 'global-question' }],
+        total_ranked: 1,
+      })),
+    };
+
+    const result = await resolveNextQuestions(home, kfdb, { limit: 3 }) as Record<string, unknown>;
+
+    expect(result).toMatchObject({
+      ranked: [{ id: 'global-question' }],
+      home_status: 'route_unavailable',
+      home_error_category: 'authorization_unavailable',
+    });
+    expect(result).not.toHaveProperty('home_error');
+    expect(JSON.stringify(result)).not.toContain('Invalid or expired token');
+  });
+
   it('maps KFDB OpenQuestions into a spoken review_pending fallback digest', () => {
     expect(
       reviewPendingFallbackFromQuestions(
