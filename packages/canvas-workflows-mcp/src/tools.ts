@@ -14,6 +14,7 @@ import { z } from 'zod';
 import {
   HomeCanvasClient,
   FailClosedError,
+  DecisionContextRequiredError,
   HomeApiError,
   type CanvasTarget,
   type ConnectToSpec,
@@ -45,6 +46,12 @@ function ok(result: unknown): ToolResult {
 function fail(err: unknown): ToolResult {
   if (err instanceof FailClosedError) {
     return { content: [{ type: 'text', text: truncate({ error: 'fail_closed', message: err.message }) }], isError: true };
+  }
+  if (err instanceof DecisionContextRequiredError) {
+    return {
+      content: [{ type: 'text', text: truncate({ error: 'decision_context_required', message: err.message }) }],
+      isError: true,
+    };
   }
   if (err instanceof HomeApiError) {
     return {
@@ -87,12 +94,75 @@ function coerceObject(value: unknown): Record<string, unknown> | undefined {
   return undefined;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+/**
+ * Small first read for a model/human: exact identities, question, score, and
+ * source closure without duplicating the potentially large dossier/pack body.
+ */
+export function compactDecisionIntelligence(response: unknown): unknown {
+  const intelligence = asRecord(asRecord(response)['intelligence']);
+  const pack = asRecord(intelligence['decisionPack']);
+  const sources = Array.isArray(pack['sources'])
+    ? pack['sources'].map(asRecord)
+    : [];
+  const missingSources = sources
+    .filter((source) => source['required'] === true && source['status'] !== 'completed')
+    .map((source) => ({
+      source: source['source'],
+      status: source['status'],
+      ...(typeof source['reason'] === 'string' && source['reason'] ? { reason: source['reason'] } : {}),
+      ...(typeof source['returned'] === 'number' ? { returned: source['returned'] } : {}),
+      ...(typeof source['totalMatched'] === 'number' ? { totalMatched: source['totalMatched'] } : {}),
+    }));
+  return {
+    provider: intelligence['provider'],
+    advisory: intelligence['advisory'],
+    available: intelligence['available'],
+    cached: intelligence['cached'],
+    display: intelligence['display'],
+    decisionPackId: pack['decisionPackId'],
+    decisionPackHash: pack['decisionPackHash'],
+    renderedContextHash: intelligence['renderedContextHash'],
+    completeness: pack['completeness'],
+    missingSources,
+    sources: sources.map((source) => ({
+      source: source['source'], required: source['required'], status: source['status'],
+      returned: source['returned'], totalMatched: source['totalMatched'],
+      cursorExhausted: source['cursorExhausted'], scanLimitHit: source['scanLimitHit'],
+    })),
+    score: intelligence['score'],
+    scheduled: intelligence['scheduled'],
+    unavailableReason: intelligence['unavailableReason'],
+    next: 'Use expand_decision_pack with this runId/approvalId to inspect the full immutable DecisionPack before resolving. Pass the observed decisionPackHash to resolve_approval.',
+  };
+}
+
+/** Full Home-authored pack projection. No consumer-side identity is minted. */
+export function expandDecisionIntelligence(response: unknown): unknown {
+  const intelligence = asRecord(asRecord(response)['intelligence']);
+  const pack = asRecord(intelligence['decisionPack']);
+  return {
+    decisionPackId: pack['decisionPackId'],
+    decisionPackHash: pack['decisionPackHash'],
+    renderedContextHash: intelligence['renderedContextHash'],
+    decisionPack: intelligence['decisionPack'],
+    score: intelligence['score'],
+    display: intelligence['display'],
+    unavailableReason: intelligence['unavailableReason'],
+  };
+}
+
 export interface RegisterToolsDeps {
   /** The home client (built fail-closed from the env signer). Injected for tests. */
   client: HomeCanvasClient;
 }
 
-/** The fourteen tools (twelve canvas + two issue-triage), all backed by home's authenticated routes. */
+/** The sixteen tools (fourteen canvas/decision + two issue-triage), all backed by home's authenticated routes. */
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { client } = deps;
 
@@ -289,17 +359,65 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   );
 
   server.tool(
+    'get_decision_intelligence',
+    'Get the compact, canonical rickydata_home DecisionPack/Levanto summary for a paused approval. Returns the exact pack hash, rendered-context hash, score, completeness, and missing sources. Read this before resolve_approval; Home remains the only pack/decision authority.',
+    {
+      runId: z.string().describe('The paused run id.'),
+      approvalId: z.string().describe('The approval gate id.'),
+    },
+    async ({ runId, approvalId }) => {
+      try {
+        return ok(compactDecisionIntelligence(await client.getDecisionIntelligence(runId, approvalId)));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    'expand_decision_pack',
+    'Expand the exact immutable DecisionPack authored by rickydata_home for a paused approval, including its complete dossier, source receipts, artifacts, completeness gaps, and Levanto receipt. This MCP never mints a separate pack identity.',
+    {
+      runId: z.string().describe('The paused run id.'),
+      approvalId: z.string().describe('The approval gate id.'),
+    },
+    async ({ runId, approvalId }) => {
+      try {
+        return ok(expandDecisionIntelligence(await client.expandDecisionPack(runId, approvalId)));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
     'resolve_approval',
-    'Approve or reject a HITL approval gate that a run paused on. Records a durable human decision in rickydata_home AND unblocks the still-open run on its target.',
+    'Approve or reject a paused HITL gate only after observing Home decision intelligence. Requires the exact decisionPackHash returned by get_decision_intelligence/expand_decision_pack, or an explicit incompleteContextOverride reason. Home validates freshness, records the durable decision, then unblocks the run.',
     {
       runId: z.string().describe('The run id that is paused at an approval gate.'),
       approvalId: z.string().describe('The approval gate id (from run_workflow\'s awaitingApprovals).'),
       decision: z.enum(['approve', 'reject']).describe('The human verdict.'),
       reason: z.string().optional().describe('Optional reason captured as feedback for self-refinement.'),
+      decisionPackId: z.string().optional().describe('The Home DecisionPack id shown by the decision-intelligence read.'),
+      decisionPackHash: z.string().regex(/^[a-f0-9]{64}$/i).optional().describe('Required observed SHA-256 pack hash unless incompleteContextOverride is supplied.'),
+      levantoScoreId: z.string().optional().describe('The Levanto score id shown to the operator, when one was displayed.'),
+      renderedContextHash: z.string().regex(/^[a-f0-9]{64}$/i).optional().describe('Hash of the exact compact decision context shown to the operator.'),
+      scoreViewedAt: z.string().optional().describe('RFC3339 time when the operator/model saw the Levanto score.'),
+      sessionId: z.string().optional().describe('The consuming MCP/agent session id for the observation receipt.'),
+      incompleteContextOverride: z.object({
+        reason: z.string().min(1).describe('Why it is safe/necessary to decide with incomplete context.'),
+        missingSources: z.array(z.string()).optional().describe('Named incomplete sources acknowledged by the operator.'),
+      }).optional().describe('Explicit, durable override used only when the pack cannot be complete.'),
     },
-    async ({ runId, approvalId, decision, reason }) => {
+    async ({
+      runId, approvalId, decision, reason, decisionPackId, decisionPackHash,
+      levantoScoreId, renderedContextHash, scoreViewedAt, sessionId, incompleteContextOverride,
+    }) => {
       try {
-        return ok(await client.resolveApproval(runId, approvalId, decision, reason));
+        return ok(await client.resolveApproval(runId, approvalId, decision, {
+          reason, decisionPackId, decisionPackHash, levantoScoreId,
+          renderedContextHash, scoreViewedAt, sessionId, incompleteContextOverride,
+        }));
       } catch (err) {
         return fail(err);
       }
@@ -411,6 +529,8 @@ export const TOOL_NAMES = [
   'canvas_remove_node',
   'canvas_update_node',
   'canvas_validate_workflow',
+  'get_decision_intelligence',
+  'expand_decision_pack',
   'resolve_approval',
   'get_run',
   'list_runs',

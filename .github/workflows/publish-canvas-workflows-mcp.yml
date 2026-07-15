@@ -62,8 +62,8 @@ jobs:
             | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{for(const l of d.split('\n')){if(!l.trim())continue;let o;try{o=JSON.parse(l)}catch{continue};if(o.id===2){console.log(o.result.tools.length)}}})")
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
           echo "::notice::canvas-workflows-mcp exposes $COUNT tools"
-          if [ "$COUNT" -ne 12 ]; then
-            echo "::error::Expected 12 tools, got $COUNT"
+          if [ "$COUNT" -ne 16 ]; then
+            echo "::error::Expected 16 tools, got $COUNT"
             exit 1
           fi
 
@@ -108,7 +108,9 @@ jobs:
             p.version = '${{ steps.ver.outputs.version }}';
             fs.writeFileSync('./packages/canvas-workflows-mcp/package.json', JSON.stringify(p, null, 2) + '\n');
           "
-          git add packages/canvas-workflows-mcp/package.json
+          # npm version updates both the workspace manifest and root lockfile;
+          # commit them together so the next npm ci remains deterministic.
+          git add packages/canvas-workflows-mcp/package.json package-lock.json
           if ! git diff --staged --quiet; then
             git commit -m "chore(canvas-workflows-mcp): publish v${{ steps.ver.outputs.version }}"
             for i in 1 2 3; do

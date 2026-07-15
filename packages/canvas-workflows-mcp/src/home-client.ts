@@ -26,6 +26,18 @@ export class FailClosedError extends Error {
   }
 }
 
+/**
+ * Thrown before network egress when an approval write is not bound to context
+ * the operator actually observed. The MCP is a consumer only: Home remains the
+ * pack/decision authority and re-validates the supplied hash on write.
+ */
+export class DecisionContextRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DecisionContextRequiredError';
+  }
+}
+
 /** Thrown when home returns a non-2xx; carries status + a capped body for diagnosis. */
 export class HomeApiError extends Error {
   constructor(
@@ -50,6 +62,40 @@ export type CanvasNodeStatus =
   | 'failed'
   | 'blocked';
 export type ApprovalDecision = 'approve' | 'reject';
+
+export interface IncompleteContextOverride {
+  reason: string;
+  missingSources?: string[];
+}
+
+export interface ResolveApprovalContext {
+  reason?: string;
+  decisionPackId?: string;
+  /** Bare SHA-256 hash shown by get_decision_intelligence/expand_decision_pack. */
+  decisionPackHash?: string;
+  levantoScoreId?: string;
+  renderedContextHash?: string;
+  scoreViewedAt?: string;
+  sessionId?: string;
+  incompleteContextOverride?: IncompleteContextOverride;
+}
+
+export interface DecisionIntelligenceResponse {
+  intelligence: {
+    provider?: string;
+    advisory?: boolean;
+    available?: boolean;
+    cached?: boolean;
+    dossier?: unknown;
+    decisionPack?: unknown;
+    score?: unknown;
+    display?: unknown;
+    renderedContextHash?: string;
+    scheduled?: unknown;
+    unavailableReason?: string;
+    [key: string]: unknown;
+  };
+}
 
 /** The single normalized event home streams from POST /api/canvas/runs. */
 export type CanvasRunEvent =
@@ -341,16 +387,60 @@ export class HomeCanvasClient {
     return this.requestJson('GET', `/api/canvas/runs/${encodeURIComponent(runId)}`);
   }
 
-  resolveApproval(
+  /**
+   * Read Home's canonical immutable DecisionPack + Levanto receipt for one
+   * paused gate. This client never derives or persists a competing pack.
+   */
+  getDecisionIntelligence(runId: string, approvalId: string): Promise<DecisionIntelligenceResponse> {
+    return this.requestJson(
+      'GET',
+      `/api/canvas/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/intelligence`,
+    );
+  }
+
+  /** Same Home read, exposed separately so callers explicitly request the full pack. */
+  expandDecisionPack(runId: string, approvalId: string): Promise<DecisionIntelligenceResponse> {
+    return this.getDecisionIntelligence(runId, approvalId);
+  }
+
+  async resolveApproval(
     runId: string,
     approvalId: string,
     decision: ApprovalDecision,
-    reason?: string,
+    context: ResolveApprovalContext,
   ): Promise<{ ok?: boolean; [k: string]: unknown }> {
-    return this.requestJson(
+    const observedPackHash = context.decisionPackHash?.trim();
+    const overrideReason = context.incompleteContextOverride?.reason?.trim();
+    if (!observedPackHash && !overrideReason) {
+      throw new DecisionContextRequiredError(
+        'Approval resolution requires the decisionPackHash returned by get_decision_intelligence, or an explicit incompleteContextOverride with a non-empty reason. No request was sent.',
+      );
+    }
+    if (observedPackHash && !/^[a-f0-9]{64}$/i.test(observedPackHash)) {
+      throw new DecisionContextRequiredError('decisionPackHash must be the 64-character SHA-256 value returned by Home. No request was sent.');
+    }
+    const body = {
+      decision,
+      ...(context.reason !== undefined ? { reason: context.reason } : {}),
+      ...(context.decisionPackId ? { decisionPackId: context.decisionPackId } : {}),
+      ...(observedPackHash ? { decisionPackHash: observedPackHash } : {}),
+      ...(context.levantoScoreId ? { levantoScoreId: context.levantoScoreId } : {}),
+      ...(context.renderedContextHash ? { renderedContextHash: context.renderedContextHash } : {}),
+      ...(context.scoreViewedAt ? { scoreViewedAt: context.scoreViewedAt } : {}),
+      ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+      ...(overrideReason ? {
+        incompleteContextOverride: {
+          reason: overrideReason,
+          ...(context.incompleteContextOverride?.missingSources?.length
+            ? { missingSources: context.incompleteContextOverride.missingSources }
+            : {}),
+        },
+      } : {}),
+    };
+    return await this.requestJson(
       'POST',
       `/api/canvas/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`,
-      { decision, ...(reason !== undefined ? { reason } : {}) },
+      body,
     );
   }
 

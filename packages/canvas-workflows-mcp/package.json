@@ -5,7 +5,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Wallet-scoped, fail-closed MCP that drives rickydata_home canvas workflows (list/save/run/approve) through home's authenticated /api/canvas/* routes.",
+  "description": "Wallet-scoped, fail-closed MCP that drives rickydata_home canvas workflows and consumes canonical DecisionPack/Levanto intelligence through home's authenticated /api/canvas/* routes.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/rickycambrian/rickydata_mcps.git",

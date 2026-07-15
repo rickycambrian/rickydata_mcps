@@ -3,12 +3,13 @@ import {
   HomeCanvasClient,
   FailClosedError,
   HomeApiError,
+  DecisionContextRequiredError,
   summarizeRun,
   readSseEvents,
   type CanvasRunEvent,
 } from '../src/home-client.js';
 import { buildAuthMessage, mintWalletToken, createWalletSigner, loadSignerFromEnv } from '../src/wallet-token.js';
-import { TOOL_NAMES } from '../src/tools.js';
+import { TOOL_NAMES, compactDecisionIntelligence, expandDecisionIntelligence } from '../src/tools.js';
 
 // A throwaway, well-known test key (NOT a real wallet) so signatures are deterministic-ish.
 const TEST_KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
@@ -46,8 +47,8 @@ function client(opts: { signer?: typeof signer | null; fetch: typeof fetch }) {
 }
 
 describe('tool surface', () => {
-  it('exposes exactly the fourteen documented tools with unique names', () => {
-    expect(TOOL_NAMES).toHaveLength(14);
+  it('exposes exactly the sixteen documented tools with unique names', () => {
+    expect(TOOL_NAMES).toHaveLength(16);
     expect(new Set(TOOL_NAMES).size).toBe(TOOL_NAMES.length);
     expect([...TOOL_NAMES]).toEqual([
       'list_workflows',
@@ -59,6 +60,8 @@ describe('tool surface', () => {
       'canvas_remove_node',
       'canvas_update_node',
       'canvas_validate_workflow',
+      'get_decision_intelligence',
+      'expand_decision_pack',
       'resolve_approval',
       'get_run',
       'list_runs',
@@ -136,7 +139,8 @@ describe('fail closed: no wallet context', () => {
     await expect(c.getWorkflow('w1')).rejects.toBeInstanceOf(FailClosedError);
     await expect(c.saveWorkflow({ name: 'x', nodes: [], connections: [] })).rejects.toBeInstanceOf(FailClosedError);
     await expect(c.runWorkflow({ workflowId: 'w1' })).rejects.toBeInstanceOf(FailClosedError);
-    await expect(c.resolveApproval('r1', 'a1', 'approve')).rejects.toBeInstanceOf(FailClosedError);
+    await expect(c.getDecisionIntelligence('r1', 'a1')).rejects.toBeInstanceOf(FailClosedError);
+    await expect(c.resolveApproval('r1', 'a1', 'approve', { decisionPackHash: 'a'.repeat(64) })).rejects.toBeInstanceOf(FailClosedError);
     await expect(c.getRun('r1')).rejects.toBeInstanceOf(FailClosedError);
     await expect(c.listRuns()).rejects.toBeInstanceOf(FailClosedError);
     expect(calls).toHaveLength(0);
@@ -181,13 +185,88 @@ describe('JSON tools hit the right path/method/body with the wallet bearer', () 
     expect(body.remoteConfig).toEqual({ model: 'claude-opus-4-8' });
   });
 
-  it('resolve_approval → POST /api/canvas/runs/:runId/approvals/:approvalId with decision+reason', async () => {
+  it('decision intelligence tools read the canonical Home approval surface', async () => {
+    const payload = {
+      intelligence: {
+        provider: 'levanto',
+        decisionPack: {
+          decisionPackId: 'pack-1',
+          decisionPackHash: 'a'.repeat(64),
+          completeness: { status: 'complete', reasons: [] },
+          sources: [{ source: 'canvas_events', required: true, status: 'completed', returned: 8 }],
+          dossier: { subject: { title: 'Continue?' } },
+        },
+        display: { question: 'Continue?', decisionPackId: 'pack-1', decisionPackHash: 'a'.repeat(64) },
+        score: { scoreId: 'score-1', chosen: 'approve', confidence: 0.82 },
+        renderedContextHash: 'b'.repeat(64),
+      },
+    };
+    const { fetch, calls } = captureFetch(() => new Response(JSON.stringify(payload), { status: 200 }));
+    const c = client({ fetch });
+
+    await expect(c.getDecisionIntelligence('run 1', 'appr/1')).resolves.toEqual(payload);
+    await expect(c.expandDecisionPack('run 1', 'appr/1')).resolves.toEqual(payload);
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.url).toBe('http://home.test/api/canvas/runs/run%201/approvals/appr%2F1/intelligence');
+      expect(call.method).toBe('GET');
+    }
+  });
+
+  it('resolve_approval refuses network egress without an observed pack hash or explicit incomplete override', async () => {
     const { fetch, calls } = captureFetch(() => new Response(JSON.stringify({ ok: true }), { status: 200 }));
-    const res = await client({ fetch }).resolveApproval('run 1', 'appr/1', 'reject', 'not safe');
+    const c = client({ fetch });
+
+    await expect(c.resolveApproval('r1', 'a1', 'approve', {})).rejects.toBeInstanceOf(DecisionContextRequiredError);
+    await expect(c.resolveApproval('r1', 'a1', 'approve', {
+      incompleteContextOverride: { reason: '   ' },
+    })).rejects.toBeInstanceOf(DecisionContextRequiredError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('resolve_approval → POST with the observed decision pack and rendered context identities', async () => {
+    const { fetch, calls } = captureFetch(() => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const res = await client({ fetch }).resolveApproval('run 1', 'appr/1', 'reject', {
+      reason: 'not safe',
+      decisionPackId: 'pack-1',
+      decisionPackHash: 'a'.repeat(64),
+      levantoScoreId: 'score-1',
+      renderedContextHash: 'b'.repeat(64),
+      scoreViewedAt: '2026-07-15T12:00:00.000Z',
+      sessionId: 'mcp-session-1',
+    });
     expect(res).toEqual({ ok: true });
     expect(calls[0].url).toBe('http://home.test/api/canvas/runs/run%201/approvals/appr%2F1');
     expect(calls[0].method).toBe('POST');
-    expect(JSON.parse(calls[0].body!)).toEqual({ decision: 'reject', reason: 'not safe' });
+    expect(JSON.parse(calls[0].body!)).toEqual({
+      decision: 'reject',
+      reason: 'not safe',
+      decisionPackId: 'pack-1',
+      decisionPackHash: 'a'.repeat(64),
+      levantoScoreId: 'score-1',
+      renderedContextHash: 'b'.repeat(64),
+      scoreViewedAt: '2026-07-15T12:00:00.000Z',
+      sessionId: 'mcp-session-1',
+    });
+  });
+
+  it('resolve_approval permits an explicit incomplete-context override and forwards named sources', async () => {
+    const { fetch, calls } = captureFetch(() => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    await client({ fetch }).resolveApproval('r1', 'a1', 'approve', {
+      reason: 'Urgent containment',
+      incompleteContextOverride: {
+        reason: 'Producer is unavailable; deciding to stop the workflow is safer.',
+        missingSources: ['delivered_context'],
+      },
+    });
+    expect(JSON.parse(calls[0].body!)).toEqual({
+      decision: 'approve',
+      reason: 'Urgent containment',
+      incompleteContextOverride: {
+        reason: 'Producer is unavailable; deciding to stop the workflow is safer.',
+        missingSources: ['delivered_context'],
+      },
+    });
   });
 
   it('get_run → GET /api/canvas/runs/:runId', async () => {
@@ -253,6 +332,47 @@ describe('JSON tools hit the right path/method/body with the wallet bearer', () 
       expect(e.status).toBe(401);
       expect(e.body).toBe('unauthorized');
     });
+  });
+});
+
+describe('decision intelligence projection', () => {
+  const response = {
+    intelligence: {
+      provider: 'levanto', advisory: true, available: true, cached: true,
+      decisionPack: {
+        decisionPackId: 'pack-1', decisionPackHash: 'a'.repeat(64),
+        completeness: { status: 'incomplete', reasons: ['missing:delivered_context'] },
+        sources: [
+          { source: 'canvas_events', required: true, status: 'completed', returned: 8 },
+          { source: 'delivered_context', required: true, status: 'incomplete', reason: 'receipt missing' },
+        ],
+        dossier: { subject: { title: 'Should the workflow continue?' }, sourceEvidence: ['large evidence'] },
+      },
+      dossier: { sourceEvidence: ['large evidence'] },
+      display: { question: 'Should the workflow continue?', whyNow: 'A gate is paused.' },
+      score: { scoreId: 'score-1', chosen: 'reject', confidence: 0.88 },
+      renderedContextHash: 'b'.repeat(64),
+    },
+  };
+
+  it('get_decision_intelligence is compact but exposes the exact observed identities and missing sources', () => {
+    const compact = compactDecisionIntelligence(response) as Record<string, unknown>;
+    expect(compact).toMatchObject({
+      decisionPackId: 'pack-1',
+      decisionPackHash: 'a'.repeat(64),
+      renderedContextHash: 'b'.repeat(64),
+      completeness: { status: 'incomplete' },
+      missingSources: [{ source: 'delivered_context', reason: 'receipt missing' }],
+      score: { scoreId: 'score-1', chosen: 'reject', confidence: 0.88 },
+    });
+    expect(JSON.stringify(compact)).not.toContain('large evidence');
+  });
+
+  it('expand_decision_pack returns the exact Home-authored pack without minting a consumer identity', () => {
+    const expanded = expandDecisionIntelligence(response) as Record<string, unknown>;
+    expect(expanded['decisionPack']).toEqual(response.intelligence.decisionPack);
+    expect(expanded['decisionPackId']).toBe('pack-1');
+    expect(expanded['decisionPackHash']).toBe('a'.repeat(64));
   });
 });
 
