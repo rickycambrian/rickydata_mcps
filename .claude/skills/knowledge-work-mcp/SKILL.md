@@ -58,9 +58,12 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - Delegated authority must remain requester-scoped from the browser capability
   through the gateway session and attached MCP. Never substitute an operator or
   service wallet and never silently fall back to global scope.
-- Private graph reads obey the KFDB law: `MATCH (n:Label) RETURN n.* LIMIT k`
-  with `{scope:'private'}`. Apply timestamps, ids, joins, and filters after the
-  whole-label read in application code.
+- Private graph reads normally obey the KFDB law: `MATCH (n:Label) RETURN n.* LIMIT k`
+  with `{scope:'private'}`. A large append-stable source may instead project an
+  explicit allowlist of properties when every projected property is directly
+  consumed by the application and tests pin the complete query. Apply
+  timestamps, ids, joins, and filters after the bounded read in application
+  code.
 - `session_brief` is payload-bounded to 8 pages, 20 claims, and 12 open
   questions while remaining non-empty for a populated wallet graph.
 - Every `trace` outcome, including route-unavailable fallback branches, must
@@ -74,14 +77,23 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
   Pulse. The registry includes development, evidence, wiki, course, learning,
   media, feedback, candidate, and content-job labels; count or source drift is a
   verifier failure, not an intentional approximation.
+- Run those independent private scans through the deterministic four-worker
+  queue. Preserve registry order in the result and never restore an unbounded
+  `Promise.all` fan-out.
+- The 20,000-row `RickydataGitCommit` scan projects only `_id`, `commit_sha`,
+  `repo_id`, `committed_at`, `authored_at`, `last_attributed_at`, `subject`, and
+  `message`; these are the exact properties consumed by recent-activity
+  normalization.
 - Individual source failures remain explicit in `sources` and `omissions`; `complete:false` means missing counts are unknown, never zero.
 - Use `trace` or `code_context` to deepen the exact receipts returned by `recent_activity`.
 - An exact `evidence:<id>` trace reads `EvidenceRecord` privately and returns an
   honest EvidenceRecord plus `CommitReference` linked by
   `EvidenceRecord.commit_sha`. Do not synthesize a `GitCommit` node that was not
   read from the graph.
-- Verified locally on 2026-07-14 with 65 package tests and TypeScript build, and
-  in production with 16 tools and wallet-private EvidenceRecord tracing.
+- Verified locally on 2026-07-15 with 72 package tests and TypeScript build, and
+  in production by source-refresh workflow `29440929663` at exact commit
+  `0c907c2d6a04d61543e3e705586c076e321708d6`, with 16 tools and a successful
+  wallet-private `recent_activity` call through the paid Knowledge Partner.
 
 ## Code Context Contract
 
@@ -176,6 +188,19 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - **Cause:** the requested bundle exceeded the useful voice payload.
 - **Fix:** preserve schema and runtime caps, use the recommended 2500/15/30 request, and keep the proof harness requirement of exactly one first-turn knowledge read.
 
+### Recent activity times out before the agent can continue
+
+- **Symptom:** a paid Knowledge Partner lifecycle reaches `recent_activity` but
+  the call exceeds its 90-second tool deadline.
+- **Cause:** all 20 private sources were launched concurrently and the largest
+  source decrypted every property for as many as 20,000 Git commits.
+- **Fix:** use the deterministic four-worker queue and the exact consumed-field
+  Git projection documented above. The red-first concurrency test observed a
+  peak of 20 before the fix and 4 after it. The 72-test package suite, build,
+  exact-source production workflow `29440929663`, and a subsequent paid
+  Knowledge Partner turn advancing past `recent_activity` verified the fix on
+  2026-07-15.
+
 ## Quick Reference
 
 | Check | Required result |
@@ -188,3 +213,5 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 | Session brief cap | 8 pages, 20 claims, 12 questions |
 | Broad voice bundle | 2500 tokens, 15 pages, 30 claims |
 | Evidence trace | Exact EvidenceRecord plus commit_sha CommitReference |
+| Recent-activity scan concurrency | At most 4 |
+| Production source refresh | Workflow `29440929663`, exact SHA `0c907c2d...` |
