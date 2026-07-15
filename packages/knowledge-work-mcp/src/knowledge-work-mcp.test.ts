@@ -480,7 +480,10 @@ describe('KFDB read/write auth split', () => {
         evidence_limit: 4,
         token_budget: 3000,
         include_tests: false,
-        include_graph: false,
+        include_graph: true,
+        graph_top_k: 3,
+        graph_depth: 1,
+        strict_scope: true,
         enable_sufficiency_gate: false,
       });
       return jsonResponse({ evidence_items: [{ file_path: 'src/context/pack.ts', stream_hits: ['fts'] }] });
@@ -545,6 +548,66 @@ describe('KFDB read/write auth split', () => {
       diagnostics: {
         evidence_count: 1,
         repo_scope_graph_only_dropped: 1,
+      },
+    });
+  });
+
+  it('keeps graph neighborhoods inside the resolved repository scope', async () => {
+    const repoId = '11111111-1111-4111-8111-111111111111';
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+      if (String(url).endsWith('/api/v1/import/github')) {
+        return jsonResponse({
+          repositories: [{
+            repo_id: repoId,
+            owner: 'rickycambrian',
+            name: 'rickydata_home',
+            full_name: 'rickycambrian/rickydata_home',
+          }],
+        });
+      }
+      return jsonResponse({
+        evidence_items: [{ node_id: 'scoped-file', stream_hits: ['fts'] }],
+        graph_neighborhood: [{
+          seed_node_id: 'scoped-file',
+          nodes: [
+            { id: 'scoped-file', label: 'File', properties: { repo_id: repoId } },
+            { id: 'scoped-function', label: 'Function', properties: { repo_id: repoId } },
+            { id: 'foreign-function', label: 'Function', properties: { repo_id: 'foreign-repo' } },
+          ],
+          edges: [
+            { edge_type: 'DEFINES', from_node: 'scoped-file', to_node: 'scoped-function' },
+            { edge_type: 'CALLS', from_node: 'scoped-function', to_node: 'foreign-function' },
+          ],
+        }],
+        diagnostics: { evidence_count: 1, graph_neighborhoods: 1 },
+      });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.codeContext({
+      task: 'How does Home define context packs?',
+      repo: 'rickycambrian/rickydata_home',
+    })).resolves.toMatchObject({
+      graph_neighborhood: [{
+        seed_node_id: 'scoped-file',
+        nodes: [
+          { id: 'scoped-file' },
+          { id: 'scoped-function' },
+        ],
+        edges: [
+          { edge_type: 'DEFINES', from_node: 'scoped-file', to_node: 'scoped-function' },
+        ],
+      }],
+      diagnostics: {
+        graph_neighborhoods: 1,
+        repo_scope_graph_nodes_dropped: 1,
+        repo_scope_graph_edges_dropped: 1,
       },
     });
   });

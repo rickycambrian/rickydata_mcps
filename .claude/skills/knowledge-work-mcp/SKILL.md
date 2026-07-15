@@ -83,6 +83,24 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - Verified locally on 2026-07-14 with 65 package tests and TypeScript build, and
   in production with 16 tools and wallet-private EvidenceRecord tracing.
 
+## Code Context Contract
+
+- A repository-scoped `code_context` call resolves the human repo name to the
+  private imported-repository UUID before retrieval and sends both
+  `include_graph:true` and `strict_scope:true` to KFDB.
+- Keep direct evidence only when it carries at least one repo-provable stream:
+  `fts`, `dense`, or `symbol`. Graph-only evidence remains excluded because it
+  cannot independently prove repository scope.
+- Preserve a graph neighborhood only after filtering every node on
+  `properties.repo_id` against the resolved repo set. Preserve only edges whose
+  endpoints both survived, and drop a neighborhood when its seed did not.
+- Return the filtered neighborhood plus explicit dropped-node/dropped-edge
+  diagnostics and the normal requester-matched private authority receipt.
+- Verified 2026-07-15 against the real private `rickydata_code` corpus:
+  `home_context.rs` and `mint_home_token` were retrieved through FTS, dense, and
+  symbol streams; the file expanded through `DEFINES` into four repo-matching
+  File/Function/Module nodes; no graph nodes or edges were filtered as foreign.
+
 ## Voice Contracts
 
 - `knowledge_bundle` is Tier 2 and voice-capped in both its public schema and runtime: `token_budget <= 4000`, `page_limit <= 20`, and `claim_limit <= 40`.

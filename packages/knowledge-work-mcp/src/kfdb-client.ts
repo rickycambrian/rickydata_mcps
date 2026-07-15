@@ -160,6 +160,50 @@ function mergeCodeContextResults(primary: unknown, supplements: unknown[], queri
   };
 }
 
+function filterScopedGraphNeighborhoods(
+  input: unknown,
+  allowedRepoIds: Set<string>,
+): { neighborhoods: Record<string, unknown>[]; nodesDropped: number; edgesDropped: number } {
+  const rawNeighborhoods = Array.isArray(input) ? input : [];
+  const neighborhoods: Record<string, unknown>[] = [];
+  let nodesDropped = 0;
+  let edgesDropped = 0;
+
+  for (const rawNeighborhood of rawNeighborhoods) {
+    if (!rawNeighborhood || typeof rawNeighborhood !== 'object' || Array.isArray(rawNeighborhood)) continue;
+    const neighborhood = rawNeighborhood as Record<string, unknown>;
+    const rawNodes = Array.isArray(neighborhood['nodes']) ? neighborhood['nodes'] : [];
+    const scopedNodes = rawNodes.filter((rawNode) => {
+      if (!rawNode || typeof rawNode !== 'object' || Array.isArray(rawNode)) return false;
+      const node = rawNode as Record<string, unknown>;
+      const properties = node['properties'];
+      if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return false;
+      return allowedRepoIds.has(String((properties as Record<string, unknown>)['repo_id'] ?? ''));
+    });
+    nodesDropped += rawNodes.length - scopedNodes.length;
+
+    const scopedNodeIds = new Set(scopedNodes.map((node) => String((node as Record<string, unknown>)['id'] ?? '')));
+    const seedNodeId = String(neighborhood['seed_node_id'] ?? '');
+    const rawEdges = Array.isArray(neighborhood['edges']) ? neighborhood['edges'] : [];
+    if (!seedNodeId || !scopedNodeIds.has(seedNodeId)) {
+      nodesDropped += scopedNodes.length;
+      edgesDropped += rawEdges.length;
+      continue;
+    }
+
+    const scopedEdges = rawEdges.filter((rawEdge) => {
+      if (!rawEdge || typeof rawEdge !== 'object' || Array.isArray(rawEdge)) return false;
+      const edge = rawEdge as Record<string, unknown>;
+      return scopedNodeIds.has(String(edge['from_node'] ?? ''))
+        && scopedNodeIds.has(String(edge['to_node'] ?? ''));
+    });
+    edgesDropped += rawEdges.length - scopedEdges.length;
+    neighborhoods.push({ ...neighborhood, nodes: scopedNodes, edges: scopedEdges });
+  }
+
+  return { neighborhoods, nodesDropped, edgesDropped };
+}
+
 const COMPLIMENT_CUES = [
   'do you like',
   'do you love',
@@ -1536,7 +1580,9 @@ export class KfdbKnowledgeClient {
       query: params.task,
       token_budget: 3000,
       include_tests: false,
-      include_graph: false,
+      include_graph: true,
+      graph_top_k: 3,
+      graph_depth: 1,
       evidence_limit: 4,
       enable_sufficiency_gate: false,
     };
@@ -1558,6 +1604,7 @@ export class KfdbKnowledgeClient {
         }, authorityHeaders);
       }
       body['repo_scope'] = (repoResolution['resolved'] as Array<{ repo_id: string }>).map((item) => item.repo_id);
+      body['strict_scope'] = true;
     }
     let result = await this.postJson<unknown>(
       '/api/v1/agent/context',
@@ -1587,18 +1634,25 @@ export class KfdbKnowledgeClient {
           && streams.some((stream) => stream === 'fts' || stream === 'dense' || stream === 'symbol');
       });
       const dropped = evidence.length - scopedEvidence.length;
+      const allowedRepoIds = new Set(
+        (repoResolution['resolved'] as Array<{ repo_id: string }>).map((item) => item.repo_id),
+      );
+      const scopedGraph = filterScopedGraphNeighborhoods(value['graph_neighborhood'], allowedRepoIds);
       const diagnostics = value['diagnostics'] && typeof value['diagnostics'] === 'object'
         ? value['diagnostics'] as Record<string, unknown>
         : {};
       return this.withAuthority({
         ...value,
         evidence_items: scopedEvidence,
-        graph_neighborhood: [],
+        graph_neighborhood: scopedGraph.neighborhoods,
         diagnostics: {
           ...diagnostics,
           evidence_count: scopedEvidence.length,
+          graph_neighborhoods: scopedGraph.neighborhoods.length,
           repo_scope_filter_applied: true,
           repo_scope_graph_only_dropped: dropped,
+          repo_scope_graph_nodes_dropped: scopedGraph.nodesDropped,
+          repo_scope_graph_edges_dropped: scopedGraph.edgesDropped,
         },
         repo_resolution: repoResolution,
       }, authorityHeaders);
