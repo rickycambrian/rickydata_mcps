@@ -120,10 +120,12 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - Never open `.rickydata_cli/tool-results` to work around a large MCP result. Reduce the MCP request instead.
 - `trace` verifies an exact claim from an exact-claim-text bundle. A page-slug bundle can omit the target claim and must not be used to infer that the claim is unverified.
 - `trace` must never reject the MCP tool call because the Home trace route is slow or unavailable. Bound the Home request and return `status:"route_unavailable"`, `fallback:"kfdb_trace"`, the subject, and any best-effort KFDB payload as a successful tool result.
+- Every route-unavailable trace exposes a plain `answer`, `fallback_status`, and categorical `home_error_category` / `fallback_error_category` diagnostics. Never return raw Home/KFDB error strings, status bodies, tokens, or authorization text. Preserve an exact answer already supplied by best-effort evidence.
 - `semantic_search` requests `include_entities:true`, then immediately safe-projects each encrypted result. Every readable hit carries first-class `title`, `summary` (whitespace-normalized, at most 200 characters), and `slug`; never return the hydrated entity or full wiki body.
 - Bound `title` to 160 characters and return `title_truncated:true` when the safe source label exceeded that limit. A safe projection must stay voice-sized even when legacy encrypted nodes stored claim text in `entity_label`.
 - Preserve the distinction between the hydrated node `_id` and the semantic result's embedding id. Return them as `node_id` and `embedding_id`; do not overwrite the stable node identity with the embedding identity.
 - Verified in production on 2026-07-15 at exact source commit `731ac694b7ab2de9e1c1e6ff021ff0ac332ce858`, package `0.1.15`: the canonical-wallet agent probe returned hydrated semantic hits with `title`, `summary`, and `slug`, observed bounded truncation, and completed a missing-page trace through the structured KFDB fallback without killing the MCP. Receipt: `/private/tmp/knowledge-partner-canonical-probe-2026-07-15T21-03-36.852Z.json`.
+- Verified in production on 2026-07-16 at exact source commit `99b36a86cb3eec7717a0e290fc8b1b55ea585fae`, package `0.1.16`, workflow `29515611481`: a missing-page trace returned the safe exact `answer`, `authorization_unavailable` / `not_found` categories, independently revalidated requester-private authority, and no raw 401/404 or token text. Receipt: `/private/tmp/knowledge-partner-canonical-probe-2026-07-16T16-31-15.704Z.json`.
 
 ## Gotchas
 
@@ -152,6 +154,17 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - **Fix:** revalidate the delegated KFDB session before every fallback return,
   stamp the same redacted authority object, and fail closed on a wallet or scope
   mismatch.
+
+### Trace survives but exposes raw route failures to the model
+
+- **Symptom:** `trace` returns successfully, but its payload includes raw Home
+  authorization text or a KFDB not-found exception that the model may repeat.
+- **Cause:** the fallback envelope preserved exception messages instead of the
+  same categorical redaction already used by ranked-question fallback.
+- **Fix:** expose only error categories, `fallback_status`, and a plain `answer`;
+  preserve structured status, subject, best-effort evidence, and independently
+  verified authority. Verified 2026-07-16 in production at package `0.1.16`,
+  source commit `99b36a8`, workflow `29515611481`.
 
 ### Semantic search is hydrated but leaks private body fields
 
@@ -231,3 +244,4 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 | Production source refresh | Workflow `29440929663`, exact SHA `0c907c2d...` |
 | Semantic hit | title <= 160 chars, summary <= 200 chars, slug present |
 | Missing trace route | Structured `route_unavailable`/`kfdb_trace`; MCP stays alive |
+| Missing trace speech | Plain `answer`; categorical diagnostics; no raw route text |
