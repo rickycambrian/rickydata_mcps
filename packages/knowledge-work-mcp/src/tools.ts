@@ -19,17 +19,22 @@ function requireKfdb(client: KfdbKnowledgeClient | null): KfdbKnowledgeClient {
   return client;
 }
 
-function fallbackReason(err: unknown): Record<string, unknown> {
+function errorCategory(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   const normalized = message.toLowerCase();
-  const category = /\b401\b|invalid or expired token|unauthori[sz]ed/.test(normalized)
+  return /\b401\b|invalid or expired token|unauthori[sz]ed/.test(normalized)
     ? 'authorization_unavailable'
+    : /\b404\b|not[ -]?found/.test(normalized)
+      ? 'not_found'
     : /timed?\s*out|timeout/.test(normalized)
       ? 'timeout'
       : 'route_unavailable';
+}
+
+function fallbackReason(err: unknown): Record<string, unknown> {
   return {
     home_status: 'route_unavailable',
-    home_error_category: category,
+    home_error_category: errorCategory(err),
   };
 }
 
@@ -65,6 +70,33 @@ interface SessionBriefReader {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function traceSubjectLabel(kind: string): string {
+  const normalized = kind.trim().toLowerCase();
+  if (['wiki-page', 'wikipage', 'page'].includes(normalized)) return 'wiki page';
+  if (['wiki-claim', 'wikiclaim'].includes(normalized)) return 'wiki claim';
+  if (['knowledge-assertion', 'assertion'].includes(normalized)) return 'knowledge assertion';
+  return 'knowledge subject';
+}
+
+function traceFallbackAnswer(
+  kind: string,
+  id: string,
+  hasBestEffort: boolean,
+  fallbackCategory?: string,
+): string {
+  const subject = `${traceSubjectLabel(kind)} ${id}`;
+  if (fallbackCategory === 'not_found') {
+    return `No matching knowledge evidence was found for ${subject}. The primary knowledge route was unavailable, but the rest of the session can continue.`;
+  }
+  if (fallbackCategory !== undefined) {
+    return `The primary knowledge route is unavailable, and no complete fallback evidence is available for ${subject}.`;
+  }
+  if (hasBestEffort) {
+    return `The primary knowledge route is unavailable, but fallback evidence was found for ${subject}.`;
+  }
+  return `The primary knowledge route is unavailable, and no fallback evidence is available for ${subject}.`;
 }
 
 export async function resolveSessionBrief(kfdb: SessionBriefReader): Promise<unknown> {
@@ -130,19 +162,39 @@ function routeUnavailableTrace(
   payload?: unknown,
   fallbackError?: unknown,
 ): Record<string, unknown> {
-  const bestEffort = payload && typeof payload === 'object'
+  const rawBestEffort = payload && typeof payload === 'object'
     ? payload as Record<string, unknown>
     : payload === undefined
       ? {}
       : { best_effort: payload };
+  const bestEffort = Object.fromEntries(
+    Object.entries(rawBestEffort).filter(([key]) => !/(?:^|_)error$/i.test(key)),
+  );
+  const fallbackCategory = fallbackError === undefined ? undefined : errorCategory(fallbackError);
+  const existingAnswer = typeof bestEffort['answer'] === 'string' && bestEffort['answer'].trim()
+    ? bestEffort['answer']
+    : undefined;
   return {
     ...bestEffort,
     ...(bestEffort['fallback'] !== undefined ? { fallback_detail: bestEffort['fallback'] } : {}),
     status: 'route_unavailable',
     fallback: 'kfdb_trace',
     subject: { kind, id },
-    home_error: errorMessage(homeError),
-    ...(fallbackError !== undefined ? { fallback_error: errorMessage(fallbackError) } : {}),
+    home_error_category: errorCategory(homeError),
+    ...(fallbackCategory !== undefined ? { fallback_error_category: fallbackCategory } : {}),
+    fallback_status: fallbackCategory === 'not_found'
+      ? 'not_found'
+      : fallbackCategory !== undefined
+        ? 'unavailable'
+        : Object.keys(bestEffort).length > 0
+          ? 'evidence_returned'
+          : 'unavailable',
+    answer: existingAnswer ?? traceFallbackAnswer(
+      kind,
+      id,
+      Object.keys(bestEffort).length > 0,
+      fallbackCategory,
+    ),
   };
 }
 
@@ -422,7 +474,7 @@ export async function resolveTrace(
             withAssertionVoiceAnswer(kind, id, await readTraceWithin(home, kind, id, homeTimeoutMs)),
             kfdb,
           ) as Record<string, unknown>),
-          kfdb_trace_error: errorMessage(kfdbError),
+          kfdb_trace_error_category: errorCategory(kfdbError),
         };
       } catch (homeError) {
         return withTraceAuthority(

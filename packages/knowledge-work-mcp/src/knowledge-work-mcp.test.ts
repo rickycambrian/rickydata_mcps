@@ -1503,7 +1503,7 @@ describe('trace fallback detection', () => {
     await expect(resolveTrace(home, kfdb, 'wiki-claim', 'evidence:evidence-1', 5)).resolves.toMatchObject({
       nodes: [{ id: 'evidence-1' }, { id: 'page-1' }],
       authority,
-      kfdb_trace_error: 'wiki claim trace not found',
+      kfdb_trace_error_category: 'not_found',
     });
     expect(kfdb.authority).toHaveBeenCalledOnce();
   });
@@ -1518,7 +1518,9 @@ describe('trace fallback detection', () => {
       kind: 'wiki-page',
       id: 'agentic-knowledge-compiler',
       title: 'Agentic Knowledge Compiler',
-      home_error: expect.stringMatching(/timed out/i),
+      home_error_category: 'timeout',
+      fallback_status: 'evidence_returned',
+      answer: 'The primary knowledge route is unavailable, but fallback evidence was found for wiki page agentic-knowledge-compiler.',
     });
   });
 
@@ -1529,10 +1531,34 @@ describe('trace fallback detection', () => {
     await expect(resolveTrace(home, kfdb, 'wiki-page', 'missing-page', 5)).resolves.toMatchObject({
       status: 'route_unavailable',
       fallback: 'kfdb_trace',
-      home_error: 'home route failed',
-      fallback_error: 'kfdb trace failed',
+      home_error_category: 'route_unavailable',
+      fallback_error_category: 'route_unavailable',
+      fallback_status: 'unavailable',
+      answer: 'The primary knowledge route is unavailable, and no complete fallback evidence is available for wiki page missing-page.',
       subject: { kind: 'wiki-page', id: 'missing-page' },
     });
+
+    const result = await resolveTrace(home, kfdb, 'wiki-page', 'missing-page', 5);
+    expect(result).not.toHaveProperty('home_error');
+    expect(result).not.toHaveProperty('fallback_error');
+    expect(JSON.stringify(result)).not.toContain('home route failed');
+    expect(JSON.stringify(result)).not.toContain('kfdb trace failed');
+  });
+
+  it('turns a missing fallback trace into a plain user-safe answer without raw auth or status text', async () => {
+    const home = { trace: vi.fn(async () => { throw new Error('home API 401: {"error":"Invalid or expired token"}'); }) };
+    const kfdb = { trace: vi.fn(async () => { throw new Error('home API 404: page not found'); }) };
+
+    const result = await resolveTrace(home, kfdb, 'wiki-page', 'definitely-missing', 5);
+    expect(result).toMatchObject({
+      status: 'route_unavailable',
+      fallback: 'kfdb_trace',
+      home_error_category: 'authorization_unavailable',
+      fallback_error_category: 'not_found',
+      fallback_status: 'not_found',
+      answer: 'No matching knowledge evidence was found for wiki page definitely-missing. The primary knowledge route was unavailable, but the rest of the session can continue.',
+    });
+    expect(JSON.stringify(result)).not.toMatch(/401|404|invalid or expired token|home API/i);
   });
 
   it('preserves independently verified KFDB authority when both trace readers fail', async () => {
