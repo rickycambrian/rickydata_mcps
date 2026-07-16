@@ -108,6 +108,22 @@ const BLOCKING_NEXT = 0.7;
 const BLOCKING_BASELINE = 0.2;
 const TRANSIENT_READ_STATUSES = new Set([429, 502, 503, 504]);
 const TRANSIENT_READ_RETRY_DELAY_MS = 250;
+const MAX_EXPLICIT_CODE_PATH_ANCHORS = 8;
+const SOURCE_PATH_PATTERN = /(?:^|[\s"'`(])((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:c|cc|cpp|css|go|h|hpp|html|java|js|jsx|json|kt|md|php|py|rb|rs|sh|sql|swift|toml|ts|tsx|yaml|yml))(?=$|[\s"'`),;:])/giu;
+
+function explicitCodePaths(task: string): string[] {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  for (const match of task.matchAll(SOURCE_PATH_PATTERN)) {
+    const path = (match[1] ?? '').replace(/^\.\//, '');
+    const segments = path.split('/');
+    if (!path || path.length > 240 || path.startsWith('/') || segments.includes('..') || seen.has(path)) continue;
+    seen.add(path);
+    paths.push(path);
+    if (paths.length >= MAX_EXPLICIT_CODE_PATH_ANCHORS) break;
+  }
+  return paths;
+}
 
 function missingCompoundIdentifierQueries(task: string, result: unknown): string[] {
   const resultText = JSON.stringify(result).toLowerCase();
@@ -1666,6 +1682,13 @@ export class KfdbKnowledgeClient {
       evidence_limit: 4,
       enable_sufficiency_gate: false,
     };
+    const taskPaths = explicitCodePaths(params.task);
+    if (taskPaths.length > 0) {
+      body['anchors'] = taskPaths.map((filePath) => ({
+        file_path: filePath,
+        anchor_reason: 'explicit_task_path',
+      }));
+    }
     let repoResolution: Record<string, unknown> | null = null;
     if (params.repo?.trim()) {
       repoResolution = await this.resolveCodeRepoScope(params.repo);

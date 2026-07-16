@@ -584,6 +584,54 @@ describe('KFDB read/write auth split', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('turns explicit source paths in the task into bounded KFDB anchors', async () => {
+    const repoId = '11111111-1111-4111-8111-111111111111';
+    const contextBodies: Array<Record<string, unknown>> = [];
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
+      if (String(url).endsWith('/api/v1/import/github')) {
+        return jsonResponse({
+          repositories: [{
+            repo_id: repoId,
+            owner: 'rickycambrian',
+            name: 'rickydata_learn',
+            full_name: 'rickycambrian/rickydata_learn',
+          }],
+        });
+      }
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as Record<string, unknown>;
+      contextBodies.push(body);
+      return jsonResponse({
+        evidence_items: [{
+          node_id: 'compose-feed',
+          file_path: 'src/feed/compose.ts',
+          stream_hits: ['symbol'],
+        }],
+      });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await kfdb.codeContext({
+      task: 'Read `src/feed/compose.ts` and src/feed/xp.ts; compare src/feed/compose.ts exactly.',
+      repo: 'rickycambrian/rickydata_learn',
+    });
+
+    expect(contextBodies).toHaveLength(1);
+    expect(contextBodies[0]).toMatchObject({
+      repo_scope: [repoId],
+      strict_scope: true,
+      anchors: [
+        { file_path: 'src/feed/compose.ts', anchor_reason: 'explicit_task_path' },
+        { file_path: 'src/feed/xp.ts', anchor_reason: 'explicit_task_path' },
+      ],
+    });
+  });
+
   it('drops graph-only code evidence that cannot prove repository scope', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url) => {
       if (String(url).endsWith('/api/v1/import/github')) {
