@@ -365,6 +365,10 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
     'answer',
     'question',
     'text',
+    // rd-plugin execution-graph labels: Plan, ClaudeCodeSession, CodeCommand.
+    'content',
+    'initial_prompt',
+    'command_preview',
   ]);
   const titleProjection = boundedSemanticTitle(sourceTitle || `${entityLabel} ${slug || 'result'}`);
   const title = titleProjection.title;
