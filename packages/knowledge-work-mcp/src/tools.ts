@@ -12,6 +12,9 @@ export interface RegisterToolsDeps {
   operatorTools?: boolean;
 }
 
+export const TRACE_TOOL_DESCRIPTION = 'Read exact provenance trace receipts for a wiki page, claim, assertion, context pack, HomeDecision, operator request, or chat session. For end-to-end lifecycle questions, trace the exact operator-request or chat-session id instead of relying on a broad bundle. For source refs like evidence:* or roadmap:*, use kind wiki-claim and id equal to the source_ref.';
+export const TRACE_KIND_DESCRIPTION = 'Trace kind, e.g. wiki-page, wiki-claim, assertion, context-pack, home-decision, operator-request, chat-session.';
+
 function requireKfdb(client: KfdbKnowledgeClient | null): KfdbKnowledgeClient {
   if (!client) {
     throw new FailClosedError('KFDB_API_URL and KFDB_API_KEY are required for knowledge-work-mcp KFDB-backed tools.');
@@ -697,9 +700,9 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
   server.tool(
     'trace',
-    'Read provenance trace receipts for a wiki page, claim, assertion, context pack, or HomeDecision. For exact source refs like evidence:* or roadmap:*, use kind wiki-claim and id equal to the source_ref.',
+    TRACE_TOOL_DESCRIPTION,
     {
-      kind: z.string().describe('Trace kind, e.g. wiki-page, wiki-claim, assertion, context-pack, home-decision.'),
+      kind: z.string().describe(TRACE_KIND_DESCRIPTION),
       id: z.string().describe('Trace subject id.'),
     },
     async ({ kind, id }) => {

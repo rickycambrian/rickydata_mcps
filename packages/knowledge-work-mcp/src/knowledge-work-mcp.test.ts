@@ -4,11 +4,20 @@ import { ApiError, FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient, RECENT_ACTIVITY_SOURCE_LABELS } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
-import { capKnowledgeBundleArgs, resolveNextQuestions, resolveReviewPending, resolveSessionBrief, resolveTrace, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, withAssertionVoiceAnswer } from './tools.js';
+import { capKnowledgeBundleArgs, resolveNextQuestions, resolveReviewPending, resolveSessionBrief, resolveTrace, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, TRACE_KIND_DESCRIPTION, TRACE_TOOL_DESCRIPTION, withAssertionVoiceAnswer } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
 }
+
+describe('trace tool guidance', () => {
+  it('advertises exact lifecycle subjects that Home can trace', () => {
+    expect(TRACE_TOOL_DESCRIPTION).toContain('operator request');
+    expect(TRACE_TOOL_DESCRIPTION).toContain('chat session');
+    expect(TRACE_KIND_DESCRIPTION).toContain('operator-request');
+    expect(TRACE_KIND_DESCRIPTION).toContain('chat-session');
+  });
+});
 
 describe('home auth fail-closed', () => {
   it('uses an injected gateway JWT without requiring the legacy wallet signer', async () => {
