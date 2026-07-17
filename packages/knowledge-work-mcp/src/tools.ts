@@ -611,10 +611,12 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       labels: labelsSchema,
       min_similarity: z.number().min(0).max(1).optional().default(0.45),
       limit: z.number().int().min(1).max(50).optional().default(8),
+      session_kind: z.enum(['interactive', 'automated']).optional()
+        .describe('ClaudeCodeSession hits only: keep human terminal sessions (interactive) or harness/benchmark runs (automated).'),
     },
-    async ({ query, labels, min_similarity, limit }) => {
+    async ({ query, labels, min_similarity, limit, session_kind }) => {
       try {
-        return ok(await requireKfdb(kfdb).semanticSearch({ query, labels, minSimilarity: min_similarity, limit }));
+        return ok(await requireKfdb(kfdb).semanticSearch({ query, labels, minSimilarity: min_similarity, limit, sessionKind: session_kind }));
       } catch (err) {
         return fail(err);
       }

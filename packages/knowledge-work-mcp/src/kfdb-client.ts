@@ -36,6 +36,8 @@ export interface SemanticSearchInput {
   labels: string[];
   minSimilarity: number;
   limit: number;
+  /** Keep only ClaudeCodeSession hits with this session_kind ('interactive' | 'automated'). */
+  sessionKind?: string;
 }
 
 type WikiPageRow = {
@@ -386,6 +388,7 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
     slug,
     ...(titleProjection.truncated ? { title_truncated: true } : {}),
     ...(sourceTitle || sourceSummary ? {} : { content_null: true }),
+    ...(firstString(entity, ['session_kind']) ? { session_kind: firstString(entity, ['session_kind']) } : {}),
   };
 }
 
@@ -1668,16 +1671,25 @@ export class KfdbKnowledgeClient {
     const headers = await this.headersWithOptionalS2D();
     const results = await Promise.all(
       labels.map(async (label) => {
+        // session_kind is filtered client-side after projection, so over-fetch
+        // ClaudeCodeSession to keep `limit` matching hits after the cut.
+        const filterKind = label === 'ClaudeCodeSession' ? input.sessionKind : undefined;
         const body = {
           query: input.query,
           label,
-          limit: input.limit,
+          limit: filterKind ? Math.min(input.limit * 4, 50) : input.limit,
           threshold: input.minSimilarity,
           include_entities: true,
         };
         try {
           const response = await this.postJson('/api/v1/semantic/search', body, headers, true);
-          return { label, ok: true, result: projectSemanticResponse(response, label) };
+          const projected = projectSemanticResponse(response, label);
+          if (filterKind) {
+            const hits = projected['results'] as Record<string, unknown>[];
+            projected['results'] = hits.filter((h) => h['session_kind'] === filterKind).slice(0, input.limit);
+            projected['session_kind_filter'] = filterKind;
+          }
+          return { label, ok: true, result: projected };
         } catch (err) {
           return { label, ok: false, error: err instanceof Error ? err.message : String(err) };
         }
