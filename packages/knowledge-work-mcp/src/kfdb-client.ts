@@ -389,6 +389,23 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
   };
 }
 
+/**
+ * Ready-to-run KQL for expanding a semantic hit one hop in the execution
+ * graph. Substitute <node_id> with a hit's node_id. Only `WHERE id(x) = ...`
+ * filters work on traversal patterns (property filters on the source node
+ * silently match nothing), so hints stick to id().
+ */
+const KQL_EXPANSION_HINTS: Record<string, string[]> = {
+  ClaudeCodeSession: [
+    "MATCH (s:ClaudeCodeSession)-[:HAS_PLAN]->(p:Plan) WHERE id(s) = '<node_id>' RETURN p.* LIMIT 10",
+  ],
+  // No PLAN_FILE hint: traversals into the CodeFile label currently fail at
+  // the storage layer (label scan too large; LocalQuorum read error).
+  Plan: [
+    "MATCH (s:ClaudeCodeSession)-[:HAS_PLAN]->(p:Plan) WHERE id(p) = '<node_id>' RETURN s.* LIMIT 5",
+  ],
+};
+
 function projectSemanticResponse(response: unknown, requestedLabel: string): Record<string, unknown> {
   const value = response && typeof response === 'object' ? response as Record<string, unknown> : {};
   const results = Array.isArray(value['results']) ? value['results'] : [];
@@ -1666,10 +1683,12 @@ export class KfdbKnowledgeClient {
         }
       }),
     );
+    const suggestedKql = labels.flatMap((label) => KQL_EXPANSION_HINTS[label] ?? []);
     return {
       query: input.query,
       min_similarity: input.minSimilarity,
       labels: results,
+      ...(suggestedKql.length > 0 ? { suggested_kql: suggestedKql } : {}),
       authority: this.authorityMetadata(headers),
     };
   }
