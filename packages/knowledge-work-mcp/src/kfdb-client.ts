@@ -111,6 +111,7 @@ const BLOCKING_BASELINE = 0.2;
 const TRANSIENT_READ_STATUSES = new Set([429, 502, 503, 504]);
 const TRANSIENT_READ_RETRY_DELAY_MS = 250;
 const MAX_EXPLICIT_CODE_PATH_ANCHORS = 8;
+const MAX_QUERY_EXPANSION_FAILURES = 8;
 const SOURCE_PATH_PATTERN = /(?:^|[\s"'`(])((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:c|cc|cpp|css|go|h|hpp|html|java|js|jsx|json|kt|md|php|py|rb|rs|sh|sql|swift|toml|ts|tsx|yaml|yml))(?=$|[\s"'`),;:])/giu;
 
 function explicitCodePaths(task: string): string[] {
@@ -125,6 +126,18 @@ function explicitCodePaths(task: string): string[] {
     if (paths.length >= MAX_EXPLICIT_CODE_PATH_ANCHORS) break;
   }
   return paths;
+}
+
+export function errorCategory(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const normalized = message.toLowerCase();
+  return /\b401\b|invalid or expired token|unauthori[sz]ed/.test(normalized)
+    ? 'authorization_unavailable'
+    : /\b404\b|not[ -]?found/.test(normalized)
+      ? 'not_found'
+    : /timed?\s*out|timeout/.test(normalized)
+      ? 'timeout'
+      : 'route_unavailable';
 }
 
 function missingCompoundIdentifierQueries(task: string, result: unknown): string[] {
@@ -1752,13 +1765,26 @@ export class KfdbKnowledgeClient {
     );
     const focusedQueries = missingCompoundIdentifierQueries(params.task, result);
     if (focusedQueries.length > 0) {
-      const supplements = await Promise.all(focusedQueries.map((query) => this.postJson<unknown>(
+      // Supplements are optional: a failed expansion must never discard the
+      // successful primary result.
+      const settled = await Promise.allSettled(focusedQueries.map((query) => this.postJson<unknown>(
         '/api/v1/agent/context',
         { ...body, query },
         authorityHeaders,
         true,
       )));
+      const supplements = settled.flatMap((s) => (s.status === 'fulfilled' ? [s.value] : []));
+      const failures = settled.flatMap((s, i) => (s.status === 'rejected'
+        ? [{ query: focusedQueries[i]!, error_category: errorCategory(s.reason) }]
+        : [])).slice(0, MAX_QUERY_EXPANSION_FAILURES);
       result = mergeCodeContextResults(result, supplements, focusedQueries);
+      if (failures.length > 0 && result && typeof result === 'object' && !Array.isArray(result)) {
+        const value = result as Record<string, unknown>;
+        const diagnostics = value['diagnostics'] && typeof value['diagnostics'] === 'object'
+          ? value['diagnostics'] as Record<string, unknown>
+          : {};
+        result = { ...value, diagnostics: { ...diagnostics, query_expansion_failures: failures } };
+      }
     }
     assertNoCiphertext(result, 'code_context');
     if (!repoResolution) return this.withAuthority(result, authorityHeaders);

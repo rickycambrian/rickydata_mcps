@@ -797,6 +797,51 @@ describe('KFDB read/write auth split', () => {
     ]);
   });
 
+  it('returns the primary code context when an optional supplement query fails', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}')) as Record<string, unknown>;
+      if (body.query === 'ProductProfile schema contract') {
+        return jsonResponse({ error: 'internal' }, { status: 500 });
+      }
+      return jsonResponse({
+        evidence_items: [{
+          node_id: 'clarification',
+          file_path: 'src/queue/sources.ts',
+          name: 'clarificationItemId',
+          stream_hits: ['symbol'],
+        }],
+        diagnostics: { total_ms: 10, evidence_count: 1 },
+      });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await expect(kfdb.codeContext({
+      task: 'Project ProductProfile Clarification',
+      repo: '11111111-1111-4111-8111-111111111111',
+    })).resolves.toMatchObject({
+      evidence_items: [{ node_id: 'clarification' }],
+      diagnostics: {
+        evidence_count: 1,
+        query_expansions: ['ProductProfile schema contract'],
+        query_expansion_failures: [{
+          query: 'ProductProfile schema contract',
+          error_category: 'route_unavailable',
+        }],
+      },
+    });
+    const failures = JSON.stringify(await kfdb.codeContext({
+      task: 'Project ProductProfile Clarification',
+      repo: '11111111-1111-4111-8111-111111111111',
+    }));
+    expect(failures).not.toContain('internal');
+  });
+
   it('returns an honest diagnostic instead of broad code results for an unindexed repo', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ repositories: [] }));
     const kfdb = new KfdbKnowledgeClient({

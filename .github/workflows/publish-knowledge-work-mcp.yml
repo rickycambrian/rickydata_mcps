@@ -2,7 +2,9 @@ name: Publish knowledge-work-mcp
 
 on:
   push:
-    paths: ['packages/knowledge-work-mcp/package.json']
+    paths:
+      - 'packages/knowledge-work-mcp/**'
+      - '.github/workflows/publish-knowledge-work-mcp.yml'
     branches: [main]
   workflow_dispatch:
     inputs:

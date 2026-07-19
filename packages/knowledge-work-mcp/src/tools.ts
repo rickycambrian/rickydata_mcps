@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { FailClosedError } from './errors.js';
 import { ok, fail } from './response.js';
 import type { HomeKnowledgeClient } from './home-client.js';
-import type { KfdbKnowledgeClient } from './kfdb-client.js';
+import { errorCategory, type KfdbKnowledgeClient } from './kfdb-client.js';
 import { buildDiscoveryCapture, buildOpenQuestionCapture } from './atoms.js';
 
 export interface RegisterToolsDeps {
@@ -20,18 +20,6 @@ function requireKfdb(client: KfdbKnowledgeClient | null): KfdbKnowledgeClient {
     throw new FailClosedError('KFDB_API_URL and KFDB_API_KEY are required for knowledge-work-mcp KFDB-backed tools.');
   }
   return client;
-}
-
-function errorCategory(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
-  const normalized = message.toLowerCase();
-  return /\b401\b|invalid or expired token|unauthori[sz]ed/.test(normalized)
-    ? 'authorization_unavailable'
-    : /\b404\b|not[ -]?found/.test(normalized)
-      ? 'not_found'
-    : /timed?\s*out|timeout/.test(normalized)
-      ? 'timeout'
-      : 'route_unavailable';
 }
 
 function fallbackReason(err: unknown): Record<string, unknown> {
