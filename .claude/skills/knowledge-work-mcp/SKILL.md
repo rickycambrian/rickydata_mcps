@@ -12,7 +12,7 @@ Test and deploy `@rickydata/knowledge-work-mcp` without weakening its voice late
 
 ## Verified
 
-2026-07-15
+2026-07-20
 
 ## Setup/Prerequisites
 
@@ -58,12 +58,10 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - Delegated authority must remain requester-scoped from the browser capability
   through the gateway session and attached MCP. Never substitute an operator or
   service wallet and never silently fall back to global scope.
-- Private graph reads normally obey the KFDB law: `MATCH (n:Label) RETURN n.* LIMIT k`
-  with `{scope:'private'}`. A large append-stable source may instead project an
-  explicit allowlist of properties when every projected property is directly
-  consumed by the application and tests pin the complete query. Apply
-  timestamps, ids, joins, and filters after the bounded read in application
-  code.
+- Every private graph read obeys the KFDB law:
+  `MATCH (n:Label) RETURN n.* LIMIT k` with `{scope:'private'}`. Pass opaque
+  pagination cursors out of band, then apply timestamps, ids, joins, and filters
+  in application code. Do not replace `n.*` with a field projection.
 - `session_brief` is payload-bounded to 8 pages, 20 claims, and 12 open
   questions while remaining non-empty for a populated wallet graph.
 - Every `trace` outcome, including route-unavailable fallback branches, must
@@ -80,10 +78,14 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - Run those independent private scans through the deterministic four-worker
   queue. Preserve registry order in the result and never restore an unbounded
   `Promise.all` fan-out.
-- The 20,000-row `RickydataGitCommit` scan projects only `_id`, `commit_sha`,
-  `repo_id`, `committed_at`, `authored_at`, `last_attributed_at`, `subject`, and
-  `message`; these are the exact properties consumed by recent-activity
-  normalization.
+- `RickydataGitCommit` uses the exact
+  `MATCH (n:RickydataGitCommit) RETURN n.* LIMIT 100000` query, 500-row opaque
+  cursor pages, and a strict page bound. Normalize each page immediately and
+  release the raw rows while retaining the full scanned row count. A 20,000-row
+  ceiling is insufficient for the tracked repository fleet.
+- `as_of` is an optional ISO-8601 projection clock. Use it when comparing
+  `recent_activity` with another read model so both windows have identical
+  `from` and `to` values; do not widen count tolerance to hide clock drift.
 - Individual source failures remain explicit in `sources` and `omissions`; `complete:false` means missing counts are unknown, never zero.
 - Use `trace` or `code_context` to deepen the exact receipts returned by `recent_activity`.
 - An exact `evidence:<id>` trace reads `EvidenceRecord` privately and returns an
@@ -94,6 +96,12 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
   in production by source-refresh workflow `29440929663` at exact commit
   `0c907c2d6a04d61543e3e705586c076e321708d6`, with 16 tools and a successful
   wallet-private `recent_activity` call through the paid Knowledge Partner.
+- Verified again on 2026-07-20 with 78 package tests, TypeScript build, source
+  deployment workflow `29714084955` at commit `e1ce4426cf9576073da161f115a06ae1b4d3baa7`,
+  and the exact Learn production verifier. The private Git scan read 20,735
+  rows, all 20 sources were complete, the pinned 24-hour window matched Pulse,
+  and every DEV/PROOF/KNOWLEDGE/LEARN/MEDIA delta was zero. Receipt:
+  `/tmp/rickydata-learn-partner-authority-proof.json`.
 
 ## Code Context Contract
 
@@ -215,18 +223,26 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - **Cause:** the requested bundle exceeded the useful voice payload.
 - **Fix:** preserve schema and runtime caps, use the recommended 2500/15/30 request, and keep the proof harness requirement of exactly one first-turn knowledge read.
 
-### Recent activity times out before the agent can continue
+### Recent activity misses repository-fleet commits
 
-- **Symptom:** a paid Knowledge Partner lifecycle reaches `recent_activity` but
-  the call exceeds its 90-second tool deadline.
-- **Cause:** all 20 private sources were launched concurrently and the largest
-  source decrypted every property for as many as 20,000 Git commits.
-- **Fix:** use the deterministic four-worker queue and the exact consumed-field
-  Git projection documented above. The red-first concurrency test observed a
-  peak of 20 before the fix and 4 after it. The 72-test package suite, build,
-  exact-source production workflow `29440929663`, and a subsequent paid
-  Knowledge Partner turn advancing past `recent_activity` verified the fix on
-  2026-07-15.
+- **Symptom:** `recent_activity` is complete but reports far fewer DEV events
+  than Pulse after the wallet tracks enough repositories.
+- **Cause:** the 20,000-row Git ceiling selected only a subset of a private
+  graph that had already grown beyond 20,000 rows.
+- **Fix:** retain the deterministic four-worker queue, scan the strict `n.*`
+  query to 100,000 through 500-row cursor pages, normalize per page, and release
+  raw Git rows. Production on 2026-07-20 scanned 20,735 rows and matched Pulse
+  exactly at 7,141 DEV events for the pinned window.
+
+### Rolling counts drift during a long verifier run
+
+- **Symptom:** both projections are healthy but DEV differs by a small moving
+  number while new commits arrive.
+- **Cause:** Pulse and the Partner evaluated “now” several minutes apart.
+- **Fix:** read Pulse first and pass its exact rolling-window `to` value as
+  `recent_activity.as_of`; assert both window endpoints before comparing counts.
+  The exact production verifier observed zero deltas across every category on
+  2026-07-20.
 
 ## Quick Reference
 
@@ -241,6 +257,8 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 | Broad voice bundle | 2500 tokens, 15 pages, 30 claims |
 | Evidence trace | Exact EvidenceRecord plus commit_sha CommitReference |
 | Recent-activity scan concurrency | At most 4 |
+| Complete Git scan | `RETURN n.* LIMIT 100000`, 500 rows/page |
+| Cross-projection comparison | Exact Pulse `to` passed as `as_of` |
 | Production source refresh | Workflow `29440929663`, exact SHA `0c907c2d...` |
 | Semantic hit | title <= 160 chars, summary <= 200 chars, slug present |
 | Missing trace route | Structured `route_unavailable`/`kfdb_trace`; MCP stays alive |
