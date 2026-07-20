@@ -695,9 +695,10 @@ type RecentActivitySource = {
 type RecentActivitySourceSpec = {
   label: string;
   limit: number;
-  /** Narrow large labels to properties consumed by this projection so KFDB
-   * does not decrypt and return unrelated private fields. */
-  fields?: readonly string[];
+  /** Opaque KFDB keyset page size for a source that can outgrow one response. */
+  pageSize?: number;
+  /** Event-only sources do not need a second raw-row copy after normalization. */
+  retainRows?: boolean;
   events?: (row: Record<string, unknown>) => RecentActivityEvent[];
 };
 
@@ -756,11 +757,7 @@ function activityEvent(
 
 const RECENT_ACTIVITY_SOURCES: RecentActivitySourceSpec[] = [
   {
-    label: 'RickydataGitCommit', limit: 20_000,
-    fields: [
-      '_id', 'commit_sha', 'repo_id', 'committed_at', 'authored_at',
-      'last_attributed_at', 'subject', 'message',
-    ],
+    label: 'RickydataGitCommit', limit: 100_000, pageSize: 500, retainRows: false,
     events: (row) => {
       const sha = str(row, 'commit_sha');
       const repo = str(row, 'repo_id');
@@ -1120,11 +1117,31 @@ export class KfdbKnowledgeClient {
     return this.withAuthority(result, headers);
   }
 
-  private async queryKql(query: string): Promise<Record<string, unknown>[]> {
-    const res = await this.postJson('/api/v1/query', { query, scope: 'private' }, await this.headersWithOptionalS2D(), true);
+  private async queryKqlPage(
+    query: string,
+    options: { pageSize?: number; cursor?: string } = {},
+  ): Promise<{ rows: Record<string, unknown>[]; hasMore: boolean; nextCursor?: string }> {
+    const res = await this.postJson<Record<string, unknown>>('/api/v1/query', {
+      query,
+      scope: 'private',
+      ...(options.pageSize ? { page_size: options.pageSize } : {}),
+      ...(options.cursor ? { cursor: options.cursor } : {}),
+    }, await this.headersWithOptionalS2D(), true);
     const rows = rowsOf(res);
     for (const row of rows) assertNoCiphertext(row, query);
-    return rows;
+    if (res['has_more'] !== undefined && typeof res['has_more'] !== 'boolean') {
+      throw new Error('KFDB private scan returned invalid pagination metadata');
+    }
+    if (res['has_more'] !== true) return { rows, hasMore: false };
+    const nextCursor = res['next_cursor'];
+    if (typeof nextCursor !== 'string' || !nextCursor.trim() || nextCursor.length > 16_384) {
+      throw new Error('KFDB private scan returned a missing or invalid pagination cursor');
+    }
+    return { rows, hasMore: true, nextCursor };
+  }
+
+  private async queryKql(query: string): Promise<Record<string, unknown>[]> {
+    return (await this.queryKqlPage(query)).rows;
   }
 
   /**
@@ -1143,13 +1160,43 @@ export class KfdbKnowledgeClient {
 
     const scan = async (source: RecentActivitySourceSpec) => {
       try {
-        const projection = source.fields?.length
-          ? source.fields.map((field) => `n.${field} AS ${field}`).join(', ')
-          : 'n.*';
-        const rows = (await this.queryKql(
-          `MATCH (n:${source.label}) RETURN ${projection} LIMIT ${source.limit}`,
-        )).map(unwrapRow);
-        const events = (source.events ? rows.flatMap(source.events) : [])
+        const query = `MATCH (n:${source.label}) RETURN n.* LIMIT ${source.limit}`;
+        const rows: Record<string, unknown>[] = [];
+        const normalizedEvents: RecentActivityEvent[] = [];
+        let rowCount = 0;
+        if (source.pageSize) {
+          const seenCursors = new Set<string>();
+          let cursor: string | undefined;
+          const maxPages = Math.ceil(source.limit / source.pageSize) + 1;
+          for (let page = 0; page < maxPages; page += 1) {
+            const result = await this.queryKqlPage(query, {
+              pageSize: source.pageSize,
+              ...(cursor ? { cursor } : {}),
+            });
+            const pageRows = result.rows.map(unwrapRow);
+            if (rowCount + pageRows.length > source.limit) {
+              throw new Error(`${source.label} private scan exceeded its row limit`);
+            }
+            rowCount += pageRows.length;
+            if (source.events) normalizedEvents.push(...pageRows.flatMap(source.events));
+            if (source.retainRows !== false) rows.push(...pageRows);
+            if (!result.hasMore) break;
+            if (pageRows.length === 0) throw new Error(`${source.label} private scan returned an empty cursor page`);
+            if (rowCount >= source.limit) throw new Error(`${source.label} private scan exceeded its row limit`);
+            if (!result.nextCursor || seenCursors.has(result.nextCursor)) {
+              throw new Error(`${source.label} private scan repeated its pagination cursor`);
+            }
+            seenCursors.add(result.nextCursor);
+            cursor = result.nextCursor;
+            if (page === maxPages - 1) throw new Error(`${source.label} private scan exceeded its page bound`);
+          }
+        } else {
+          const pageRows = (await this.queryKql(query)).map(unwrapRow);
+          rowCount = pageRows.length;
+          rows.push(...pageRows);
+          if (source.events) normalizedEvents.push(...pageRows.flatMap(source.events));
+        }
+        const events = normalizedEvents
           .filter((event) => {
             const occurredAt = Date.parse(event.occurred_at);
             return Number.isFinite(occurredAt) && occurredAt >= fromMs && occurredAt <= now.getTime();
@@ -1161,7 +1208,7 @@ export class KfdbKnowledgeClient {
         const status: RecentActivitySource = {
           label: source.label,
           ok: true,
-          row_count: rows.length,
+          row_count: rowCount,
           event_count: events.length,
           watermark,
           omission: '',
