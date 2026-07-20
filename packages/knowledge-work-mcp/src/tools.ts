@@ -56,7 +56,20 @@ interface SessionBriefReader {
     include_questions: boolean;
     question_limit: number;
   }): Promise<unknown>;
-  recentActivity(input: { hours: number; limit: number }): Promise<unknown>;
+  recentActivity(input: { hours: number; limit: number; now?: Date }): Promise<unknown>;
+}
+
+export function recentActivityRequest(input: {
+  hours: number;
+  limit: number;
+  asOf?: string;
+}): { hours: number; limit: number; now?: Date } {
+  if (!input.asOf) return { hours: input.hours, limit: input.limit };
+  const now = new Date(input.asOf);
+  if (!Number.isFinite(now.getTime())) {
+    throw new Error('recent_activity as_of value is invalid');
+  }
+  return { hours: input.hours, limit: input.limit, now };
 }
 
 function errorMessage(err: unknown): string {
@@ -559,10 +572,11 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     {
       hours: z.number().int().min(1).max(168).optional().default(24).describe('Rolling UTC window in hours. Defaults to the exact past 24 hours.'),
       limit: z.number().int().min(1).max(100).optional().default(40).describe('Maximum chronological receipts returned. Category counts still cover the full window.'),
+      as_of: z.string().datetime({ offset: true }).optional().describe('Optional ISO-8601 projection end time. Use this to compare the exact same rolling window with another read model.'),
     },
-    async ({ hours, limit }) => {
+    async ({ hours, limit, as_of }) => {
       try {
-        return ok(await requireKfdb(kfdb).recentActivity({ hours, limit }));
+        return ok(await requireKfdb(kfdb).recentActivity(recentActivityRequest({ hours, limit, asOf: as_of })));
       } catch (err) {
         return fail(err);
       }

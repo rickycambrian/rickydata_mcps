@@ -4,7 +4,7 @@ import { ApiError, FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient, RECENT_ACTIVITY_SOURCE_LABELS } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
-import { capKnowledgeBundleArgs, resolveNextQuestions, resolveReviewPending, resolveSessionBrief, resolveTrace, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, TRACE_KIND_DESCRIPTION, TRACE_TOOL_DESCRIPTION, withAssertionVoiceAnswer } from './tools.js';
+import { capKnowledgeBundleArgs, recentActivityRequest, resolveNextQuestions, resolveReviewPending, resolveSessionBrief, resolveTrace, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, TRACE_KIND_DESCRIPTION, TRACE_TOOL_DESCRIPTION, withAssertionVoiceAnswer } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
@@ -107,6 +107,21 @@ describe('home auth fail-closed', () => {
 });
 
 describe('KFDB read/write auth split', () => {
+  it('pins recent activity to an explicit UTC projection clock', () => {
+    expect(recentActivityRequest({
+      hours: 24,
+      limit: 100,
+      asOf: '2026-07-20T02:31:04.123Z',
+    })).toEqual({
+      hours: 24,
+      limit: 100,
+      now: new Date('2026-07-20T02:31:04.123Z'),
+    });
+    expect(recentActivityRequest({ hours: 24, limit: 100 })).toEqual({ hours: 24, limit: 100 });
+    expect(() => recentActivityRequest({ hours: 24, limit: 100, asOf: 'not-a-time' }))
+      .toThrow('recent_activity as_of value is invalid');
+  });
+
   it('keeps the verified knowledge bundle as the primary session brief', async () => {
     const bundle = { pages: [{ slug: 'authority' }], claims: [{ verified: true }], reproducibility_hash: 'bundle-hash' };
     const reader = {
