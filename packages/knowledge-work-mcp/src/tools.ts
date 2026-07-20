@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { FailClosedError } from './errors.js';
 import { ok, fail } from './response.js';
 import type { HomeKnowledgeClient } from './home-client.js';
-import { errorCategory, type KfdbKnowledgeClient } from './kfdb-client.js';
+import { errorCategory, DEFAULT_SEARCH_LABELS, type KfdbKnowledgeClient } from './kfdb-client.js';
 import { buildDiscoveryCapture, buildOpenQuestionCapture } from './atoms.js';
 
 export interface RegisterToolsDeps {
@@ -402,8 +402,14 @@ export async function resolveReviewPending(
 const labelsSchema = z
   .array(z.string())
   .optional()
-  .default(['WikiPage', 'OpenQuestion', 'HomeDecision', 'RoadmapItem'])
-  .describe('Graph labels to search. Defaults to WikiPage, OpenQuestion, HomeDecision, RoadmapItem.');
+  .default(DEFAULT_SEARCH_LABELS)
+  .describe(
+    'Graph labels to search. CHOOSE the labels relevant to your query — call ' +
+    'list_search_labels to see the full searchable catalogue (development ' +
+    'episodes, commits, decisions, plans, insights, scouting, opportunities, ' +
+    'entities, sessions, ContentArtifact payloads, …). Omit to use a broad ' +
+    `high-value default (${DEFAULT_SEARCH_LABELS.join(', ')}).`,
+  );
 
 export function shouldUseKfdbTraceFallback(trace: unknown): boolean {
   if (!trace || typeof trace !== 'object') return false;
@@ -550,6 +556,21 @@ export async function resolveTrace(
   }
 }
 
+// The searchable-label catalogue rarely changes; cache it ~10 min so
+// list_search_labels does not round-trip home on every call.
+let searchLabelCache: { at: number; labels: string[] } | null = null;
+const SEARCH_LABEL_CACHE_MS = 10 * 60 * 1000;
+
+async function fetchSearchLabels(home: HomeKnowledgeClient): Promise<{ labels: string[]; cached: boolean }> {
+  const now = Date.now();
+  if (searchLabelCache && now - searchLabelCache.at < SEARCH_LABEL_CACHE_MS) {
+    return { labels: searchLabelCache.labels, cached: true };
+  }
+  const labels = await home.searchLabels();
+  searchLabelCache = { at: now, labels };
+  return { labels, cached: false };
+}
+
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { home, kfdb, operatorTools = false } = deps;
 
@@ -619,6 +640,20 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     async ({ query, labels, min_similarity, limit, session_kind }) => {
       try {
         return ok(await requireKfdb(kfdb).semanticSearch({ query, labels, minSimilarity: min_similarity, limit, sessionKind: session_kind }));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    'list_search_labels',
+    'List the private-graph labels available to semantic_search. Call this to discover what boundaries exist, then pass the labels relevant to your query into semantic_search (rather than searching everything). Cached ~10 min.',
+    {},
+    async () => {
+      try {
+        const { labels, cached } = await fetchSearchLabels(home);
+        return ok({ labels, count: labels.length, default_labels: DEFAULT_SEARCH_LABELS, cached });
       } catch (err) {
         return fail(err);
       }

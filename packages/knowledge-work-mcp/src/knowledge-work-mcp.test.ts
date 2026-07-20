@@ -580,6 +580,28 @@ describe('KFDB read/write auth split', () => {
     expect(hit?.title_truncated).toBe(true);
   });
 
+  it('caps the label fan-out and reports truncation so a caller cannot storm KFDB', async () => {
+    // Fresh Response per call — a shared one has a single-read body and would
+    // trip the transient-read retry, inflating the call count.
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse({ results: [], total_hits: 0, took_ms: 1 }));
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+    const labels = Array.from({ length: 50 }, (_, i) => `Label${i}`);
+    const response = await kfdb.semanticSearch({
+      query: 'everything', labels, minSimilarity: 0.45, limit: 8,
+    }) as { labels: unknown[]; labels_truncated?: number; label_cap?: number };
+
+    expect(response.labels).toHaveLength(40);   // capped
+    expect(response.labels_truncated).toBe(10);
+    expect(response.label_cap).toBe(40);
+    expect(fetchImpl).toHaveBeenCalledTimes(40); // one HNSW search per kept label, no more
+  });
+
   it('resolves human repository names before requesting scoped code context', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
       if (String(url).endsWith('/api/v1/import/github')) {

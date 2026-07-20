@@ -111,6 +111,12 @@ export class HomeKnowledgeClient {
     return text ? (JSON.parse(text) as T) : ({} as T);
   }
 
+  /** The searchable-label catalogue (labels that carry private-tenant embeddings). */
+  async searchLabels(): Promise<string[]> {
+    const body = await this.requestJson<{ labels?: unknown }>('GET', '/api/embedding/labels');
+    return Array.isArray(body.labels) ? body.labels.filter((l): l is string => typeof l === 'string') : [];
+  }
+
   wikiSearch(query: string, limit = 5): Promise<unknown> {
     const qs = new URLSearchParams({ q: query, limit: String(limit) });
     return this.requestJson('GET', `/api/wiki/search?${qs.toString()}`);

@@ -3,6 +3,32 @@ import { ApiError, FailClosedError } from './errors.js';
 import type { S2DProvider } from './s2d.js';
 import type { WriteRequest } from './atoms.js';
 
+// High-value default labels when a caller does not choose. The full searchable
+// catalogue is ~100 labels — consumers should let the agent pick relevant ones
+// (see list_search_labels) rather than search everything on every query.
+export const DEFAULT_SEARCH_LABELS = [
+  'WikiPage', 'OpenQuestion', 'HomeDecision', 'RoadmapItem',
+  'RickydataDevelopmentEpisode', 'RickydataGitCommit', 'DecisionPack', 'Plan',
+  'Learning', 'RickydataWorkInsight', 'RickydataExplainer', 'ContentArtifact',
+];
+
+// Fan-out guards for multi-label semantic search (one HNSW query per label).
+const SEMANTIC_SEARCH_LABEL_CAP = 40;
+const SEMANTIC_SEARCH_CONCURRENCY = 8;
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const idx = next++;
+      out[idx] = await fn(items[idx]!);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 /**
  * When KFDB rejects a request because the sign-to-derive session is invalid
  * (revoked or expired), rewrite the error into actionable guidance: the fix
@@ -1727,39 +1753,43 @@ export class KfdbKnowledgeClient {
   }
 
   async semanticSearch(input: SemanticSearchInput): Promise<unknown> {
-    const labels = input.labels.length > 0 ? input.labels : ['WikiPage', 'OpenQuestion', 'HomeDecision', 'RoadmapItem'];
+    const requested = input.labels.length > 0 ? input.labels : DEFAULT_SEARCH_LABELS;
+    // Each label is one HNSW search; cap the fan-out so a caller passing the whole
+    // catalogue can't storm KFDB, and bound concurrency for the rest.
+    const labels = requested.slice(0, SEMANTIC_SEARCH_LABEL_CAP);
+    const truncated = requested.length - labels.length;
     const headers = await this.headersWithOptionalS2D();
-    const results = await Promise.all(
-      labels.map(async (label) => {
-        // session_kind is filtered client-side after projection, so over-fetch
-        // ClaudeCodeSession to keep `limit` matching hits after the cut.
-        const filterKind = label === 'ClaudeCodeSession' ? input.sessionKind : undefined;
-        const body = {
-          query: input.query,
-          label,
-          limit: filterKind ? Math.min(input.limit * 4, 50) : input.limit,
-          threshold: input.minSimilarity,
-          include_entities: true,
-        };
-        try {
-          const response = await this.postJson('/api/v1/semantic/search', body, headers, true);
-          const projected = projectSemanticResponse(response, label);
-          if (filterKind) {
-            const hits = projected['results'] as Record<string, unknown>[];
-            projected['results'] = hits.filter((h) => h['session_kind'] === filterKind).slice(0, input.limit);
-            projected['session_kind_filter'] = filterKind;
-          }
-          return { label, ok: true, result: projected };
-        } catch (err) {
-          return { label, ok: false, error: err instanceof Error ? err.message : String(err) };
+    const searchLabel = async (label: string) => {
+      // session_kind is filtered client-side after projection, so over-fetch
+      // ClaudeCodeSession to keep `limit` matching hits after the cut.
+      const filterKind = label === 'ClaudeCodeSession' ? input.sessionKind : undefined;
+      const body = {
+        query: input.query,
+        label,
+        limit: filterKind ? Math.min(input.limit * 4, 50) : input.limit,
+        threshold: input.minSimilarity,
+        include_entities: true,
+      };
+      try {
+        const response = await this.postJson('/api/v1/semantic/search', body, headers, true);
+        const projected = projectSemanticResponse(response, label);
+        if (filterKind) {
+          const hits = projected['results'] as Record<string, unknown>[];
+          projected['results'] = hits.filter((h) => h['session_kind'] === filterKind).slice(0, input.limit);
+          projected['session_kind_filter'] = filterKind;
         }
-      }),
-    );
+        return { label, ok: true, result: projected };
+      } catch (err) {
+        return { label, ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    };
+    const results = await mapWithConcurrency(labels, SEMANTIC_SEARCH_CONCURRENCY, searchLabel);
     const suggestedKql = labels.flatMap((label) => KQL_EXPANSION_HINTS[label] ?? []);
     return {
       query: input.query,
       min_similarity: input.minSimilarity,
       labels: results,
+      ...(truncated > 0 ? { labels_truncated: truncated, label_cap: SEMANTIC_SEARCH_LABEL_CAP } : {}),
       ...(suggestedKql.length > 0 ? { suggested_kql: suggestedKql } : {}),
       authority: this.authorityMetadata(headers),
     };
