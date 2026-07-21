@@ -12,7 +12,7 @@ Test and deploy `@rickydata/knowledge-work-mcp` without weakening its voice late
 
 ## Verified
 
-2026-07-20
+2026-07-21
 
 ## Setup/Prerequisites
 
@@ -20,6 +20,7 @@ Test and deploy `@rickydata/knowledge-work-mcp` without weakening its voice late
 - Use the repository's installed workspace dependencies.
 - GitHub CLI must be authenticated for source-refresh dispatches.
 - Production registration is server `3883e5df-de92-5c4d-9c09-f4f79a62e22d`.
+- The admin-hidden public benchmark registration is server `f09f1acc-990a-4305-97a6-8e92c196aa97`.
 
 ## Commands
 
@@ -39,13 +40,20 @@ gh workflow run publish-knowledge-work-mcp.yml \
   -f refresh_source=true
 ```
 
-The workflow's blocking `Verify production source commit` step polls the public MCP registration until its source commit equals the dispatched Git SHA and the server exposes exactly 16 tools. Treat a green workflow as the production receipt; do not infer success from the registry write alone. Verified 2026-07-14 by workflow run `29369870079` against commit `9464ba9a`.
+The workflow's blocking `Verify production source commit` step requires the private registration to expose the dispatched Git SHA with exactly 16 tools and the admin-hidden public benchmark registration to expose the same SHA with exactly four tools through authenticated admin metadata. Treat a green workflow as the production receipt; do not infer success from the registry write alone. Verified 2026-07-21 by workflow run `29860535816`, attempt 2, against commit `8b32c06f673cbed877a856264cfecd82aca7fb8a`.
 
 Check the non-secret production registration fields:
 
 ```bash
 curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e22d \
   | jq '{id,name,version,status,toolsCount,lastEnrichedCommitSha}'
+```
+
+If a source refresh overlaps a normal MCP Gateway deployment, wait for that deployment to reach its own terminal result, then rerun only the failed publication jobs:
+
+```bash
+gh run rerun 29860535816 --failed
+gh run view 29860535816 --json status,conclusion,attempt,jobs,url
 ```
 
 ## Private Authority Contract
@@ -136,6 +144,31 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 - Verified in production on 2026-07-16 at exact source commit `99b36a86cb3eec7717a0e290fc8b1b55ea585fae`, package `0.1.16`, workflow `29515611481`: a missing-page trace returned the safe exact `answer`, `authorization_unavailable` / `not_found` categories, independently revalidated requester-private authority, and no raw 401/404 or token text. Receipt: `/private/tmp/knowledge-partner-canonical-probe-2026-07-16T16-31-15.704Z.json`.
 
 ## Gotchas
+
+### The public benchmark registration returns 404 after a successful reload
+
+- **Symptom:** the public benchmark stop/reload succeeds, but
+  `GET /api/servers/f09f1acc-990a-4305-97a6-8e92c196aa97` returns 404 and a
+  public source-SHA poll can never observe its four tools.
+- **Cause:** the benchmark registration is intentionally `admin_hidden`; public
+  server accessors exclude it even though the gateway loaded it.
+- **Fix:** keep the registration hidden. Verify its exact source SHA through
+  authenticated `/api/admin/servers/:id/erc8004/status` and its tool count
+  through authenticated `/api/admin/servers/hidden`. Verified 2026-07-21 by
+  workflow `29860535816`, attempt 2: exact SHA `8b32c06f...`, 16 private tools,
+  and four public benchmark tools.
+
+### Source refresh overlaps a blue-green gateway cutover
+
+- **Symptom:** package tests, build, and KFDB writes pass, then the authenticated
+  private stop/reload exits through `curl -f` before the source proof runs.
+- **Cause:** the refresh reached the gateway during its CI/CD blue-green
+  cutover; the runtime endpoint was transiently unavailable.
+- **Fix:** let the gateway deployment succeed or fail naturally, then use
+  `gh run rerun <run-id> --failed`. Do not weaken the reload or source-SHA
+  checks. Verified 2026-07-21: workflow `29860535816` attempt 1 failed at the
+  reload during registry deployment `29860462754`; attempt 2 passed after that
+  deployment completed successfully.
 
 ### Source write succeeds but production remains stale
 
@@ -250,8 +283,9 @@ curl -sS https://mcp.rickydata.org/api/servers/3883e5df-de92-5c4d-9c09-f4f79a62e
 |---|---|
 | Package tests | All tests pass |
 | Package build | TypeScript build passes |
-| Public tool count | 16 |
-| Production source | Exact dispatched Git SHA |
+| Private tool count | 16 |
+| Public benchmark tool count | 4 through authenticated hidden-server metadata |
+| Production source | Exact dispatched Git SHA on both registrations |
 | Private authority | Requester wallet, wallet-private tenant, private scope |
 | Session brief cap | 8 pages, 20 claims, 12 questions |
 | Broad voice bundle | 2500 tokens, 15 pages, 30 claims |
