@@ -8,30 +8,39 @@ import { HomeKnowledgeClient } from './home-client.js';
 import { loadKfdbClientFromEnv } from './kfdb-client.js';
 import { loadS2DProviderFromEnv, StaticS2DProvider } from './s2d.js';
 import { getRuntimeIdentity, PACKAGE_VERSION } from './runtime-identity.js';
+import { EpochBenchClient, registerPublicBenchmarkTools } from './public-benchmark.js';
 
+const env = process.env;
+const publicBenchmarkMode = env.KNOWLEDGE_WORK_MCP_MODE?.trim() === 'public-benchmark';
 const server = new McpServer({
-  name: 'knowledge-work-mcp',
+  name: publicBenchmarkMode ? 'knowledge-work-public-benchmark' : 'knowledge-work-mcp',
   version: PACKAGE_VERSION,
 });
 
-const env = process.env;
-const signer = loadSignerFromEnv(env);
-const kfdbApiUrl = env.KFDB_API_URL?.trim() || 'https://db.rickydata.org';
-const s2d = loadS2DProviderFromEnv(env, kfdbApiUrl);
-const homeGatewayJwt = env.HOME_GATEWAY_JWT?.trim() || null;
-const home = new HomeKnowledgeClient({
-  baseUrl: env.HOME_API_URL?.trim() || 'https://rickydata-home-2dbp4scmrq-uc.a.run.app',
-  signer,
-  gatewayJwt: homeGatewayJwt,
-  s2d,
-});
-const kfdb = loadKfdbClientFromEnv({ ...env, KFDB_API_URL: kfdbApiUrl }, s2d);
-
-registerTools(server, {
-  home,
-  kfdb,
-  operatorTools: env.KNOWLEDGE_WORK_MCP_OPERATOR_TOOLS?.trim().toLowerCase() === 'true',
-});
+let homeGatewayJwt: string | null = null;
+let signer: ReturnType<typeof loadSignerFromEnv> = null;
+let s2d: ReturnType<typeof loadS2DProviderFromEnv> = null;
+let kfdb: ReturnType<typeof loadKfdbClientFromEnv> = null;
+if (publicBenchmarkMode) {
+  registerPublicBenchmarkTools(server, EpochBenchClient.fromEnv(env));
+} else {
+  signer = loadSignerFromEnv(env);
+  const kfdbApiUrl = env.KFDB_API_URL?.trim() || 'https://db.rickydata.org';
+  s2d = loadS2DProviderFromEnv(env, kfdbApiUrl);
+  homeGatewayJwt = env.HOME_GATEWAY_JWT?.trim() || null;
+  const home = new HomeKnowledgeClient({
+    baseUrl: env.HOME_API_URL?.trim() || 'https://rickydata-home-2dbp4scmrq-uc.a.run.app',
+    signer,
+    gatewayJwt: homeGatewayJwt,
+    s2d,
+  });
+  kfdb = loadKfdbClientFromEnv({ ...env, KFDB_API_URL: kfdbApiUrl }, s2d);
+  registerTools(server, {
+    home,
+    kfdb,
+    operatorTools: env.KNOWLEDGE_WORK_MCP_OPERATOR_TOOLS?.trim().toLowerCase() === 'true',
+  });
+}
 
 async function main() {
   const useHttp = env.TRANSPORT === 'http' || env.PORT;
@@ -51,6 +60,7 @@ async function main() {
         status: 'ok',
         server: 'knowledge-work-mcp',
         runtime_identity: getRuntimeIdentity(),
+        mode: publicBenchmarkMode ? 'public-benchmark' : 'private',
         home_configured: Boolean(homeGatewayJwt || signer),
         home_auth_mode: homeGatewayJwt ? 'gateway-jwt' : signer ? 'wallet-key' : null,
         kfdb_configured: Boolean(kfdb),

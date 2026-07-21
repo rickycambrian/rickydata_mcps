@@ -68,6 +68,18 @@ jobs:
             echo "::error::Expected 16 tools, got $COUNT"
             exit 1
           fi
+          PUBLIC_COUNT=$(printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | BENCH_EPOCH_RUNTIME_TOKEN=ci-token RICKYDATA_RUNTIME_SCOPE_ID=ci-scope \
+              node packages/knowledge-work-mcp/dist/public-index.js 2>/dev/null \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{for(const l of d.split('\n')){if(!l.trim())continue;let o;try{o=JSON.parse(l)}catch{continue};if(o.id===2){console.log(o.result.tools.length)}}})")
+          echo "public_count=$PUBLIC_COUNT" >> "$GITHUB_OUTPUT"
+          echo "::notice::knowledge-work-public-benchmark exposes $PUBLIC_COUNT tools"
+          if [ "$PUBLIC_COUNT" -ne 4 ]; then
+            echo "::error::Expected 4 public benchmark tools, got $PUBLIC_COUNT"
+            exit 1
+          fi
 
       - name: Detect package distribution
         id: distribution
@@ -142,9 +154,16 @@ jobs:
             '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' ; sleep 2 ) \
             | node packages/knowledge-work-mcp/dist/index.js 2>/dev/null \
             | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{for(const l of d.split('\n')){if(!l.trim())continue;let o;try{o=JSON.parse(l)}catch{continue};if(o.id===2)require('fs').writeFileSync('/tmp/tools_available.json',JSON.stringify(o.result.tools))}})"
+          ( printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' ; sleep 2 ) \
+            | BENCH_EPOCH_RUNTIME_TOKEN=ci-token RICKYDATA_RUNTIME_SCOPE_ID=ci-scope \
+              node packages/knowledge-work-mcp/dist/public-index.js 2>/dev/null \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{for(const l of d.split('\n')){if(!l.trim())continue;let o;try{o=JSON.parse(l)}catch{continue};if(o.id===2)require('fs').writeFileSync('/tmp/public_tools_available.json',JSON.stringify(o.result.tools))}})"
           node -e "
             const fs=require('fs');
             const tools=JSON.parse(fs.readFileSync('/tmp/tools_available.json','utf8'));
+            const publicTools=JSON.parse(fs.readFileSync('/tmp/public_tools_available.json','utf8'));
             const v='${{ steps.ver.outputs.version }}';
             const registryType='${{ steps.registry.outputs.type }}';
             const pkg='@rickydata/knowledge-work-mcp';
@@ -173,6 +192,12 @@ jobs:
             const runCommand=registryType === 'npm'
               ? 'npx -y @rickydata/knowledge-work-mcp@'+v
               : 'npm start';
+            const publicRunCommand=registryType === 'npm'
+              ? 'npx -y --package @rickydata/knowledge-work-mcp@'+v+' knowledge-work-public-benchmark-mcp'
+              : 'node dist/public-index.js';
+            const publicSecrets=[
+              {name:'BENCH_EPOCH_RUNTIME_TOKEN',description:'Service token used only to resolve the gateway-injected benchmark runtime scope to its immutable epoch.',required:true}
+            ];
             const payload={operations:[{operation:'create_node',id:'3883e5df-de92-5c4d-9c09-f4f79a62e22d',label:'MCPServer',mode:'merge',properties:{
               name:{String:'knowledge-work-mcp'},
               server_name:{String:'knowledge-work-mcp'},
@@ -207,9 +232,43 @@ jobs:
               repository_subfolder:{String:packageSubdir},
               package_subdir:{String:packageSubdir},
               last_enriched_commit_sha:{String:'${{ github.sha }}'},
+            }},{operation:'create_node',id:'f09f1acc-990a-4305-97a6-8e92c196aa97',label:'MCPServer',mode:'merge',properties:{
+              name:{String:'knowledge-work-public-benchmark'},
+              server_name:{String:'knowledge-work-public-benchmark'},
+              package_identifier:{String:pkg},
+              version:{String:v}, latest_version:{String:v}, tools_count:{Integer:publicTools.length},
+              tools_available:{String:JSON.stringify(publicTools)},
+              install_command:{String:installCommand},
+              run_command:{String:publicRunCommand},
+              enriched_at:{String:new Date().toISOString()}, enrichment_version:{Integer:5},
+              description:{String:'Public-only, read-only RickyData Knowledge Partner tools bound to one immutable benchmark case and knowledge epoch.'},
+              gateway_compatible:{Boolean:true},
+              gateway_runnable:{Boolean:true},
+              registry_type:{String:registryType},
+              deployment_type:{String:'local_tool'},
+              transport_type:{String:'stdio'},
+              can_run_standalone:{Boolean:true},
+              gateway_safe:{Boolean:true},
+              gateway_recommendation:{String:'APPROVED'},
+              security_score:{Integer:95},
+              security_risk:{String:'safe'},
+              gateway_security_score:{Integer:90},
+              gateway_risk_score:{Integer:10},
+              required_env_vars:{String:JSON.stringify(['BENCH_EPOCH_RUNTIME_TOKEN'])},
+              secrets_required:{String:JSON.stringify(publicSecrets)},
+              required_credentials:{String:JSON.stringify([])},
+              secrets_optional:{String:JSON.stringify([])},
+              external_services:{String:JSON.stringify(['rickydata', 'bench'])},
+              categories:{String:JSON.stringify(['Knowledge', 'Benchmark', 'RickyData'])},
+              admin_hidden:{Boolean:true},
+              source_repository:{String:sourceRepository},
+              repository_url:{String:sourceRepository},
+              repository_subfolder:{String:packageSubdir},
+              package_subdir:{String:packageSubdir},
+              last_enriched_commit_sha:{String:'${{ github.sha }}'},
             }}]};
             fs.writeFileSync('/tmp/knowledge-work-payload.json', JSON.stringify(payload));
-            console.log('KFDB payload: '+tools.length+' tools, v'+v+', registry='+registryType);
+            console.log('KFDB payload: '+tools.length+' private tools, '+publicTools.length+' public tools, v'+v+', registry='+registryType);
           "
 
       - name: POST MCPServer entity to KFDB
@@ -221,7 +280,9 @@ jobs:
             -d @/tmp/knowledge-work-payload.json \
             | tee /tmp/knowledge-work-kfdb-response.json
           echo "node_id=3883e5df-de92-5c4d-9c09-f4f79a62e22d" >> "$GITHUB_OUTPUT"
+          echo "public_node_id=f09f1acc-990a-4305-97a6-8e92c196aa97" >> "$GITHUB_OUTPUT"
           echo "::notice::KFDB MCPServer entity registered as 3883e5df-de92-5c4d-9c09-f4f79a62e22d"
+          echo "::notice::KFDB MCPServer entity registered as f09f1acc-990a-4305-97a6-8e92c196aa97"
 
       - name: Notify source enrichment pipeline
         env:
@@ -232,6 +293,12 @@ jobs:
             -f "client_payload[package]=@rickydata/knowledge-work-mcp" \
             -f "client_payload[version]=${{ steps.ver.outputs.version }}" \
             -f "client_payload[serverId]=${{ steps.kfdb.outputs.node_id }}" \
+            -f "client_payload[sourceCommit]=${{ github.sha }}"
+          gh api repos/rickycambrian/mcp_deployments_registry/dispatches \
+            -f event_type=rickydata-mcps-published \
+            -f "client_payload[package]=@rickydata/knowledge-work-mcp" \
+            -f "client_payload[version]=${{ steps.ver.outputs.version }}" \
+            -f "client_payload[serverId]=${{ steps.kfdb.outputs.public_node_id }}" \
             -f "client_payload[sourceCommit]=${{ github.sha }}"
           echo "::notice::Dispatched source enrichment for ${{ github.sha }}"
 
@@ -255,24 +322,48 @@ jobs:
             exit 1
           fi
 
+      - name: Sync public benchmark server in MCP gateway
+        run: |
+          MCP_GW="${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}"
+          PUBLIC_SERVER_ID="${{ steps.kfdb.outputs.public_node_id }}"
+          curl -sf --max-time 30 -X POST "$MCP_GW/api/servers/$PUBLIC_SERVER_ID/stop" \
+            -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
+            -H "Content-Type: application/json"
+          RESPONSE=$(curl -s --max-time 30 -X POST "$MCP_GW/health/reload/$PUBLIC_SERVER_ID" \
+            -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" \
+            -H "Content-Type: application/json" || echo '{"error":"sync failed"}')
+          STATUS=$(printf '%s' "$RESPONSE" | jq -r '.status // empty' 2>/dev/null || true)
+          INVALIDATED=$(printf '%s' "$RESPONSE" | jq -r '.invalidatedInstances // empty' 2>/dev/null || true)
+          if [ "$STATUS" = "updated" ] && [[ "$INVALIDATED" =~ ^[0-9]+$ ]]; then
+            echo "::notice::MCP gateway synced the four-tool public benchmark server"
+          else
+            echo "::error::Public benchmark MCP gateway reload failed"
+            exit 1
+          fi
+
       - name: Verify production source commit
         if: steps.registry.outputs.type == 'git'
         timeout-minutes: 35
         run: |
           MCP_GW="${{ vars.MCP_GATEWAY_URL || 'https://mcp.rickydata.org' }}"
           SERVER_ID="${{ steps.kfdb.outputs.node_id }}"
+          PUBLIC_SERVER_ID="${{ steps.kfdb.outputs.public_node_id }}"
           for attempt in $(seq 1 180); do
             BODY=$(curl -fsS --max-time 30 "$MCP_GW/api/servers/$SERVER_ID" || true)
+            PUBLIC_BODY=$(curl -fsS --max-time 30 "$MCP_GW/api/servers/$PUBLIC_SERVER_ID" || true)
             SHA=$(printf '%s' "$BODY" | jq -r '.lastEnrichedCommitSha // empty' 2>/dev/null || true)
             COUNT=$(printf '%s' "$BODY" | jq -r '.toolsCount // 0' 2>/dev/null || true)
-            if [ "$SHA" = "${{ github.sha }}" ] && [ "$COUNT" -eq 16 ]; then
-              echo "::notice::Production exposes $SHA with $COUNT tools"
+            PUBLIC_SHA=$(printf '%s' "$PUBLIC_BODY" | jq -r '.lastEnrichedCommitSha // empty' 2>/dev/null || true)
+            PUBLIC_COUNT=$(printf '%s' "$PUBLIC_BODY" | jq -r '.toolsCount // 0' 2>/dev/null || true)
+            if [ "$SHA" = "${{ github.sha }}" ] && [ "$COUNT" -eq 16 ] \
+              && [ "$PUBLIC_SHA" = "${{ github.sha }}" ] && [ "$PUBLIC_COUNT" -eq 4 ]; then
+              echo "::notice::Production exposes $SHA with 16 tools in the private registration and 4 public benchmark tools"
               exit 0
             fi
-            echo "Waiting for production source refresh (attempt $attempt/180, sha=${SHA:-missing}, tools=${COUNT:-0})"
+            echo "Waiting for production source refresh (attempt $attempt/180, private_sha=${SHA:-missing}, private_tools=${COUNT:-0}, public_sha=${PUBLIC_SHA:-missing}, public_tools=${PUBLIC_COUNT:-0})"
             sleep 10
           done
-          echo "::error::Production did not expose ${{ github.sha }} with 16 tools"
+          echo "::error::Production did not expose ${{ github.sha }} with 16 tools in the private registration and 4 public benchmark tools"
           exit 1
 
       - name: Commit version bump
@@ -304,8 +395,10 @@ jobs:
           echo "## knowledge-work-mcp Publish Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Version**: ${{ steps.ver.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Tools**: ${{ steps.tools.outputs.count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Public benchmark tools**: ${{ steps.tools.outputs.public_count }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **npm available**: ${{ steps.distribution.outputs.npm_available }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Already on npm**: ${{ steps.check.outputs.exists }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Publish**: ${{ steps.publish.outcome || 'skipped' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Registry mode**: ${{ steps.registry.outputs.type || 'unknown' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **MCPServer id**: 3883e5df-de92-5c4d-9c09-f4f79a62e22d" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Public benchmark MCPServer id**: f09f1acc-990a-4305-97a6-8e92c196aa97" >> "$GITHUB_STEP_SUMMARY"

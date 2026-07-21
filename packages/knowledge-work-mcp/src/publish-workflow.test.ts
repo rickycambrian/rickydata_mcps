@@ -36,6 +36,16 @@ describe('knowledge-work-mcp publish workflow', () => {
     expect(workflow).toContain('exit 1');
   });
 
+  it('registers and verifies a separate four-tool public benchmark server', () => {
+    expect(workflow).toContain('f09f1acc-990a-4305-97a6-8e92c196aa97');
+    expect(workflow).toContain('knowledge-work-public-benchmark');
+    expect(workflow).toContain('dist/public-index.js');
+    expect(workflow).toContain('BENCH_EPOCH_RUNTIME_TOKEN');
+    expect(workflow).toContain('Expected 4 public benchmark tools');
+    expect(workflow).toContain('PUBLIC_COUNT');
+    expect(workflow).toContain('"$PUBLIC_COUNT" -eq 4');
+  });
+
   it('fails closed when the gateway cannot reload the source-backed runtime', () => {
     const syncStep = workflow.match(
       /- name: Sync server in MCP gateway \(instant single-entity refresh\)([\s\S]*?)(?=\n      - name:)/,

@@ -14,7 +14,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "knowledge-work-mcp": "dist/index.js"
+    "knowledge-work-mcp": "dist/index.js",
+    "knowledge-work-public-benchmark-mcp": "dist/public-index.js"
   },
   "exports": {
     ".": "./dist/index.js"
