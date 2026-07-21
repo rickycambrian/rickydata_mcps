@@ -69,7 +69,8 @@ The package intentionally exposes exactly 16 tools:
 `semantic_search` safe-projects hydrated private entities. Readable hits expose
 compact `title`, `summary`, and `slug` fields; transcript-like titles are capped
 at 160 characters and marked with `title_truncated: true` so noisy source atoms
-cannot dominate the model context.
+cannot dominate the model context. Call it with `list_labels: true` to discover
+the current searchable label catalogue without expanding the 16-tool contract.
 
 ## Development
 

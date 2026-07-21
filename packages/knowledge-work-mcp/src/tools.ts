@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { FailClosedError } from './errors.js';
 import { ok, fail } from './response.js';
 import type { HomeKnowledgeClient } from './home-client.js';
-import { errorCategory, DEFAULT_SEARCH_LABELS, type KfdbKnowledgeClient } from './kfdb-client.js';
+import { errorCategory, DEFAULT_SEARCH_LABELS, type KfdbKnowledgeClient, type SemanticSearchInput } from './kfdb-client.js';
 import { buildDiscoveryCapture, buildOpenQuestionCapture } from './atoms.js';
 
 export interface RegisterToolsDeps {
@@ -405,7 +405,7 @@ const labelsSchema = z
   .default(DEFAULT_SEARCH_LABELS)
   .describe(
     'Graph labels to search. CHOOSE the labels relevant to your query — call ' +
-    'list_search_labels to see the full searchable catalogue (development ' +
+    'semantic_search with list_labels=true to see the full searchable catalogue (development ' +
     'episodes, commits, decisions, plans, insights, scouting, opportunities, ' +
     'entities, sessions, ContentArtifact payloads, …). Omit to use a broad ' +
     `high-value default (${DEFAULT_SEARCH_LABELS.join(', ')}).`,
@@ -556,12 +556,12 @@ export async function resolveTrace(
   }
 }
 
-// The searchable-label catalogue rarely changes; cache it ~10 min so
-// list_search_labels does not round-trip home on every call.
+// The searchable-label catalogue rarely changes; cache it ~10 min so label
+// discovery through semantic_search does not round-trip home on every call.
 let searchLabelCache: { at: number; labels: string[] } | null = null;
 const SEARCH_LABEL_CACHE_MS = 10 * 60 * 1000;
 
-async function fetchSearchLabels(home: HomeKnowledgeClient): Promise<{ labels: string[]; cached: boolean }> {
+async function fetchSearchLabels(home: Pick<HomeKnowledgeClient, 'searchLabels'>): Promise<{ labels: string[]; cached: boolean }> {
   const now = Date.now();
   if (searchLabelCache && now - searchLabelCache.at < SEARCH_LABEL_CACHE_MS) {
     return { labels: searchLabelCache.labels, cached: true };
@@ -569,6 +569,26 @@ async function fetchSearchLabels(home: HomeKnowledgeClient): Promise<{ labels: s
   const labels = await home.searchLabels();
   searchLabelCache = { at: now, labels };
   return { labels, cached: false };
+}
+
+export async function resolveSemanticSearch(
+  home: Pick<HomeKnowledgeClient, 'searchLabels'>,
+  kfdb: Pick<KfdbKnowledgeClient, 'semanticSearch'>,
+  input: Partial<SemanticSearchInput> & { listLabels?: boolean },
+): Promise<unknown> {
+  if (input.listLabels) {
+    const { labels, cached } = await fetchSearchLabels(home);
+    return { labels, count: labels.length, default_labels: DEFAULT_SEARCH_LABELS, cached };
+  }
+  const query = input.query?.trim();
+  if (!query) throw new FailClosedError('semantic_search query is required unless list_labels is true');
+  return kfdb.semanticSearch({
+    query,
+    labels: input.labels ?? DEFAULT_SEARCH_LABELS,
+    minSimilarity: input.minSimilarity ?? 0.45,
+    limit: input.limit ?? 8,
+    sessionKind: input.sessionKind,
+  });
 }
 
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
@@ -628,32 +648,27 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
   server.tool(
     'semantic_search',
-    'Semantic HNSW search over private graph labels. Uses S2D when available.',
+    'Semantic HNSW search over private graph labels. Set list_labels=true to discover searchable boundaries without adding another tool.',
     {
-      query: z.string().describe('Natural-language query.'),
+      query: z.string().optional().describe('Natural-language query. Required unless list_labels=true.'),
       labels: labelsSchema,
       min_similarity: z.number().min(0).max(1).optional().default(0.45),
       limit: z.number().int().min(1).max(50).optional().default(8),
+      list_labels: z.boolean().optional().default(false)
+        .describe('Return the searchable label catalogue and defaults instead of running a query.'),
       session_kind: z.enum(['interactive', 'automated']).optional()
         .describe('ClaudeCodeSession hits only: keep human terminal sessions (interactive) or harness/benchmark runs (automated).'),
     },
-    async ({ query, labels, min_similarity, limit, session_kind }) => {
+    async ({ query, labels, min_similarity, limit, list_labels, session_kind }) => {
       try {
-        return ok(await requireKfdb(kfdb).semanticSearch({ query, labels, minSimilarity: min_similarity, limit, sessionKind: session_kind }));
-      } catch (err) {
-        return fail(err);
-      }
-    },
-  );
-
-  server.tool(
-    'list_search_labels',
-    'List the private-graph labels available to semantic_search. Call this to discover what boundaries exist, then pass the labels relevant to your query into semantic_search (rather than searching everything). Cached ~10 min.',
-    {},
-    async () => {
-      try {
-        const { labels, cached } = await fetchSearchLabels(home);
-        return ok({ labels, count: labels.length, default_labels: DEFAULT_SEARCH_LABELS, cached });
+        return ok(await resolveSemanticSearch(home, requireKfdb(kfdb), {
+          query,
+          labels,
+          minSimilarity: min_similarity,
+          limit,
+          listLabels: list_labels,
+          sessionKind: session_kind,
+        }));
       } catch (err) {
         return fail(err);
       }

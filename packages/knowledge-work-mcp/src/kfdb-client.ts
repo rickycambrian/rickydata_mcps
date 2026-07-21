@@ -5,7 +5,7 @@ import type { WriteRequest } from './atoms.js';
 
 // High-value default labels when a caller does not choose. The full searchable
 // catalogue is ~100 labels — consumers should let the agent pick relevant ones
-// (see list_search_labels) rather than search everything on every query.
+// (see semantic_search list_labels mode) rather than search everything on every query.
 export const DEFAULT_SEARCH_LABELS = [
   'WikiPage', 'OpenQuestion', 'HomeDecision', 'RoadmapItem',
   'RickydataDevelopmentEpisode', 'RickydataGitCommit', 'DecisionPack', 'Plan',

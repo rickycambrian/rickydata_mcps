@@ -4,7 +4,7 @@ import { ApiError, FailClosedError } from './errors.js';
 import { HomeKnowledgeClient } from './home-client.js';
 import { KfdbKnowledgeClient, RECENT_ACTIVITY_SOURCE_LABELS } from './kfdb-client.js';
 import { deriveOpenQuestionId } from './ids.js';
-import { capKnowledgeBundleArgs, recentActivityRequest, resolveNextQuestions, resolveReviewPending, resolveSessionBrief, resolveTrace, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, TRACE_KIND_DESCRIPTION, TRACE_TOOL_DESCRIPTION, withAssertionVoiceAnswer } from './tools.js';
+import { capKnowledgeBundleArgs, recentActivityRequest, resolveNextQuestions, resolveReviewPending, resolveSemanticSearch, resolveSessionBrief, resolveTrace, reviewPendingFallbackFromQuestions, shouldPreferKfdbTrace, shouldUseKfdbTraceFallback, TRACE_KIND_DESCRIPTION, TRACE_TOOL_DESCRIPTION, withAssertionVoiceAnswer } from './tools.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'content-type': 'application/json' } });
@@ -107,6 +107,31 @@ describe('home auth fail-closed', () => {
 });
 
 describe('KFDB read/write auth split', () => {
+  it('discovers searchable labels through semantic_search without adding a seventeenth tool', async () => {
+    const home = { searchLabels: vi.fn().mockResolvedValue(['WikiPage', 'HomeDecision']) };
+    const kfdb = { semanticSearch: vi.fn() };
+
+    await expect(resolveSemanticSearch(home, kfdb, { listLabels: true }))
+      .resolves.toEqual({
+        labels: ['WikiPage', 'HomeDecision'],
+        count: 2,
+        default_labels: expect.any(Array),
+        cached: false,
+      });
+    expect(home.searchLabels).toHaveBeenCalledOnce();
+    expect(kfdb.semanticSearch).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when semantic_search has neither a query nor label-discovery mode', async () => {
+    const home = { searchLabels: vi.fn() };
+    const kfdb = { semanticSearch: vi.fn() };
+
+    await expect(resolveSemanticSearch(home, kfdb, {}))
+      .rejects.toThrow('query is required unless list_labels is true');
+    expect(home.searchLabels).not.toHaveBeenCalled();
+    expect(kfdb.semanticSearch).not.toHaveBeenCalled();
+  });
+
   it('pins recent activity to an explicit UTC projection clock', () => {
     expect(recentActivityRequest({
       hours: 24,
