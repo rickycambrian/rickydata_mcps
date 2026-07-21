@@ -350,11 +350,18 @@ jobs:
           PUBLIC_SERVER_ID="${{ steps.kfdb.outputs.public_node_id }}"
           for attempt in $(seq 1 180); do
             BODY=$(curl -fsS --max-time 30 "$MCP_GW/api/servers/$SERVER_ID" || true)
-            PUBLIC_BODY=$(curl -fsS --max-time 30 "$MCP_GW/api/servers/$PUBLIC_SERVER_ID" || true)
+            PUBLIC_STATUS=$(curl -fsS --max-time 30 \
+              "$MCP_GW/api/admin/servers/$PUBLIC_SERVER_ID/erc8004/status" \
+              -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" || true)
+            HIDDEN_SERVERS=$(curl -fsS --max-time 30 \
+              "$MCP_GW/api/admin/servers/hidden" \
+              -H "Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}" || true)
             SHA=$(printf '%s' "$BODY" | jq -r '.lastEnrichedCommitSha // empty' 2>/dev/null || true)
             COUNT=$(printf '%s' "$BODY" | jq -r '.toolsCount // 0' 2>/dev/null || true)
-            PUBLIC_SHA=$(printf '%s' "$PUBLIC_BODY" | jq -r '.lastEnrichedCommitSha // empty' 2>/dev/null || true)
-            PUBLIC_COUNT=$(printf '%s' "$PUBLIC_BODY" | jq -r '.toolsCount // 0' 2>/dev/null || true)
+            PUBLIC_SHA=$(printf '%s' "$PUBLIC_STATUS" | jq -r '.server.lastEnrichedCommitSha // empty' 2>/dev/null || true)
+            PUBLIC_COUNT=$(printf '%s' "$HIDDEN_SERVERS" \
+              | jq --arg id "$PUBLIC_SERVER_ID" -r '.servers[]? | select(.id == $id) | .toolsCount' 2>/dev/null \
+              | head -1)
             if [ "$SHA" = "${{ github.sha }}" ] && [ "$COUNT" -eq 16 ] \
               && [ "$PUBLIC_SHA" = "${{ github.sha }}" ] && [ "$PUBLIC_COUNT" -eq 4 ]; then
               echo "::notice::Production exposes $SHA with 16 tools in the private registration and 4 public benchmark tools"

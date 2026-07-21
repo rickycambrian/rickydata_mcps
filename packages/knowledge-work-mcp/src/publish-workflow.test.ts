@@ -46,6 +46,19 @@ describe('knowledge-work-mcp publish workflow', () => {
     expect(workflow).toContain('"$PUBLIC_COUNT" -eq 4');
   });
 
+  it('verifies the admin-hidden public benchmark server through authenticated admin metadata', () => {
+    const verifyStep = workflow.match(
+      /- name: Verify production source commit([\s\S]*?)(?=\n      - name:)/,
+    )?.[1] ?? '';
+
+    expect(verifyStep).toContain('/api/admin/servers/$PUBLIC_SERVER_ID/erc8004/status');
+    expect(verifyStep).toContain('/api/admin/servers/hidden');
+    expect(verifyStep).toContain('Authorization: Bearer ${{ secrets.OPERATOR_WALLET_TOKEN }}');
+    expect(verifyStep).toContain(".server.lastEnrichedCommitSha // empty");
+    expect(verifyStep).toContain("select(.id == $id) | .toolsCount");
+    expect(verifyStep).not.toContain('$MCP_GW/api/servers/$PUBLIC_SERVER_ID');
+  });
+
   it('fails closed when the gateway cannot reload the source-backed runtime', () => {
     const syncStep = workflow.match(
       /- name: Sync server in MCP gateway \(instant single-entity refresh\)([\s\S]*?)(?=\n      - name:)/,
