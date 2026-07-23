@@ -1,7 +1,7 @@
 ---
 name: cfa-capstone-mcps
 description: Use when building or validating the CFA capstone MCP servers for SEC, official macro, tradfi market data, Hyperliquid tradfi microstructure, and evidence bundles.
-allowed-tools: Bash(npm:*), Bash(node:*)
+allowed-tools: Bash(npm:*), Bash(node:*), Bash(gh:*), Bash(rickydata:*), Bash(curl:*), Bash(jq:*), Bash(ruby:*)
 ---
 
 # CFA Capstone MCPs
@@ -19,6 +19,8 @@ Validate the local MCP servers that support the Ricky CFA capstone research stac
 ## Verified
 
 2026-05-26 from `/Users/riccardoesclapon/Documents/github/rickydata_mcps`.
+
+Production publish and RickyData catalog verification updated 2026-05-27 UTC.
 
 ## Setup / Prerequisites
 
@@ -175,6 +177,55 @@ npm pack --dry-run --workspace rickydata-capstone-evidence-mcp
 
 Observed result: each tarball included `README.md`, `package.json`, and compiled `dist/**` files only after adding `files: ["dist", "README.md"]` to each package manifest.
 
+Publish all five MCPs to the RickyData registry:
+
+```bash
+gh workflow run publish-cfa-capstone-mcps.yml --repo rickycambrian/rickydata_mcps --ref main -f package=all
+```
+
+Observed result: workflow run `26483030522` completed successfully for all five packages on commit `18a175ad78a08203b15a6117d1ffd6f63cbf76d4`.
+
+Verify the public catalog resolves only the canonical visible server rows:
+
+```bash
+for q in sec-edgar-mcp official-macro-mcp tradfi-market-data-mcp hyperliquid-tradfi-microstructure-mcp capstone-evidence-mcp; do
+  printf '== %s\n' "$q"
+  rickydata mcp search "$q" --format json | jq -r '[.total, (.servers[0].id // ""), (.servers[0].toolsCount // 0)] | @tsv'
+done
+```
+
+Observed result:
+
+```text
+sec-edgar-mcp                                1  94234b89-edfa-4c8f-b3e0-f4ebd063c27d  5
+official-macro-mcp                          1  ff94bc15-8a74-4dd9-aa98-e504b7a30a62  5
+tradfi-market-data-mcp                      1  7b92e311-cab7-47fd-a3b2-1ec66982057a  5
+hyperliquid-tradfi-microstructure-mcp       1  f306e47c-37f1-46c7-95db-432168e53ed9  6
+capstone-evidence-mcp                       1  6ee3927d-8642-4063-b3f6-97d550a3d116  5
+```
+
+Canonical KFDB MCPServer IDs:
+
+```text
+rickydata-sec-edgar-mcp                         94234b89-edfa-4c8f-b3e0-f4ebd063c27d
+rickydata-official-macro-mcp                    ff94bc15-8a74-4dd9-aa98-e504b7a30a62
+rickydata-tradfi-market-data-mcp                7b92e311-cab7-47fd-a3b2-1ec66982057a
+rickydata-hyperliquid-tradfi-microstructure-mcp f306e47c-37f1-46c7-95db-432168e53ed9
+rickydata-capstone-evidence-mcp                 6ee3927d-8642-4063-b3f6-97d550a3d116
+```
+
+Run production paid smoke calls after catalog reload:
+
+```bash
+rickydata mcp call sec-edgar-mcp__sec_search_company '{"query":"NVDA","limit":1}' --profile capstone-test
+rickydata mcp call official-macro-mcp__macro_treasury_yield_curve '{"year":2026,"limit":1}' --profile capstone-test
+rickydata mcp call tradfi-market-data-mcp__market_get_quote '{"symbol":"NVDA","provider":"nasdaq_public"}' --profile capstone-test
+rickydata mcp call hyperliquid-tradfi-microstructure-mcp__hl_discover_tradfi_markets '{"source":"live_api","assetClass":"equity","limit":1}' --profile capstone-test
+rickydata mcp call capstone-evidence-mcp__evidence_list_artifacts '{}' --profile capstone-test
+```
+
+Observed result: all five calls settled and returned successful JSON. SEC resolved `NVDA` to CIK `0001045810`; Treasury returned `2026-05-26` 10Y `4.5` and 30Y `5.03`; Nasdaq public returned NVDA price `214.86` as of `2026-05-26`; Hyperliquid live API returned one equity-style market from `dex=xyz`; evidence listed the configured artifact directory.
+
 ## Gotchas
 
 | Symptom | Cause | Fix |
@@ -184,6 +235,11 @@ Observed result: each tarball included `README.md`, `package.json`, and compiled
 | Stooq CSV returns an API-key message | Stooq now requires an API key for direct CSV downloads | The local tradfi smoke uses Nasdaq public quote history for no-secret development |
 | FRED/EIA tools return `configured:false` | API keys are optional and were not configured in the verified run | Provide `FRED_API_KEY` or `EIA_API_KEY` for those tools; Treasury and BLS smoke without keys |
 | Hyperliquid taxonomy says `not_validated` for tradfi rows even after docs mention validation | ClickHouse may not have all latest validation rows loaded | Treat local `hl_get_local_validation_status` as the source of loaded proof state; do not overclaim beyond loaded rows |
+| `npm publish` fails with `E404` for new RickyData packages | The available `NPM_TOKEN` could update existing packages but could not create these new packages | Use the source-backed git registration path in `publish-cfa-capstone-mcps.yml` |
+| Publish workflow creates duplicate `MCPServer` rows | `update_node` did not have a usable existing ID, or the payload missed `label: MCPServer` | Use the stable canonical IDs above via `/api/v1/entities/MCPServer/:id`; include `label: MCPServer` on `update_node` |
+| KFDB graph query fails with `Graph load exceeded 50000 node limit` | Broad `MATCH (n:MCPServer)` traversal on the large MCPServer label is not reliable | Use the Entity API for known IDs; avoid graph traversal for publish-time lookup |
+| Hidden duplicate rows still appear in `rickydata mcp search` | Gateway in-memory cache has not reloaded the hidden rows | POST `/health/reload/:serverId` for both canonical and duplicate IDs, then re-run catalog search |
+| External SEC, macro, market data, or Hyperliquid calls return paid but `fetch failed` | Gateway sandbox treats the server as isolated unless both KFDB `external_services` and gateway domain allowlists include the service | Set `external_services` in KFDB and deploy the matching `NetworkManager` service domains before production proof calls |
 
 ## Quick Reference
 

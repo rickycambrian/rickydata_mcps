@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "research-papers-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "research-papers-mcp"
+      ],
+      "env": {}
+    }
+  }
+}
