@@ -15,7 +15,8 @@
   "main": "dist/index.js",
   "bin": {
     "knowledge-work-mcp": "dist/index.js",
-    "knowledge-work-public-benchmark-mcp": "dist/public-index.js"
+    "knowledge-work-public-benchmark-mcp": "dist/public-index.js",
+    "knowledge-work-private-benchmark-mcp": "dist/private-index.js"
   },
   "exports": {
     ".": "./dist/index.js"

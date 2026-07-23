@@ -9,11 +9,17 @@ import { loadKfdbClientFromEnv } from './kfdb-client.js';
 import { loadS2DProviderFromEnv, StaticS2DProvider } from './s2d.js';
 import { getRuntimeIdentity, PACKAGE_VERSION } from './runtime-identity.js';
 import { EpochBenchClient, registerPublicBenchmarkTools } from './public-benchmark.js';
+import { PrivateBenchmarkClient, registerPrivateBenchmarkTools } from './private-benchmark.js';
 
 const env = process.env;
 const publicBenchmarkMode = env.KNOWLEDGE_WORK_MCP_MODE?.trim() === 'public-benchmark';
+const privateBenchmarkMode = env.KNOWLEDGE_WORK_MCP_MODE?.trim() === 'private-benchmark';
 const server = new McpServer({
-  name: publicBenchmarkMode ? 'knowledge-work-public-benchmark' : 'knowledge-work-mcp',
+  name: publicBenchmarkMode
+    ? 'knowledge-work-public-benchmark'
+    : privateBenchmarkMode
+      ? 'knowledge-work-private-benchmark'
+      : 'knowledge-work-mcp',
   version: PACKAGE_VERSION,
 });
 
@@ -23,6 +29,8 @@ let s2d: ReturnType<typeof loadS2DProviderFromEnv> = null;
 let kfdb: ReturnType<typeof loadKfdbClientFromEnv> = null;
 if (publicBenchmarkMode) {
   registerPublicBenchmarkTools(server, EpochBenchClient.fromEnv(env));
+} else if (privateBenchmarkMode) {
+  registerPrivateBenchmarkTools(server, PrivateBenchmarkClient.fromEnv(env));
 } else {
   signer = loadSignerFromEnv(env);
   const kfdbApiUrl = env.KFDB_API_URL?.trim() || 'https://db.rickydata.org';
@@ -60,7 +68,7 @@ async function main() {
         status: 'ok',
         server: 'knowledge-work-mcp',
         runtime_identity: getRuntimeIdentity(),
-        mode: publicBenchmarkMode ? 'public-benchmark' : 'private',
+        mode: publicBenchmarkMode ? 'public-benchmark' : privateBenchmarkMode ? 'private-benchmark' : 'private',
         home_configured: Boolean(homeGatewayJwt || signer),
         home_auth_mode: homeGatewayJwt ? 'gateway-jwt' : signer ? 'wallet-key' : null,
         kfdb_configured: Boolean(kfdb),

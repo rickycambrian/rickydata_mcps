@@ -32,7 +32,7 @@ describe('knowledge-work-mcp publish workflow', () => {
     expect(workflow).toContain('toolsCount');
     expect(workflow).toContain('"$COUNT" -ne 16');
     expect(workflow).toContain('"$COUNT" -eq 16');
-    expect(workflow).toContain('with 16 tools');
+    expect(workflow).toContain('with 16 private tools');
     expect(workflow).toContain('exit 1');
   });
 
@@ -44,6 +44,16 @@ describe('knowledge-work-mcp publish workflow', () => {
     expect(workflow).toContain('Expected 4 public benchmark tools');
     expect(workflow).toContain('PUBLIC_COUNT');
     expect(workflow).toContain('"$PUBLIC_COUNT" -eq 4');
+  });
+
+  it('registers and verifies a separate four-tool private live-work benchmark server', () => {
+    expect(workflow).toContain('b7631cfe-b667-4853-b61a-bca6a647b1f1');
+    expect(workflow).toContain('knowledge-work-private-benchmark');
+    expect(workflow).toContain('dist/private-index.js');
+    expect(workflow).toContain('HOME_BENCH_RUNTIME_TOKEN');
+    expect(workflow).toContain('Expected 4 private benchmark tools');
+    expect(workflow).toContain('PRIVATE_BENCH_COUNT');
+    expect(workflow).toContain('"$PRIVATE_BENCH_COUNT" -eq 4');
   });
 
   it('verifies the admin-hidden public benchmark server through authenticated admin metadata', () => {
