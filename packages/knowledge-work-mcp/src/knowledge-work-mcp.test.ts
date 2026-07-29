@@ -534,7 +534,7 @@ describe('KFDB read/write auth split', () => {
               node_id: '11111111-1111-4111-8111-111111111111',
               embedding_id: 'embedding-doc-page',
               title: 'The Agentic Knowledge Compiler',
-              summary: longSummary.slice(0, 200),
+              summary: longSummary.slice(0, 1200),
               slug: 'agentic-knowledge-compiler',
             }],
           },
@@ -603,6 +603,48 @@ describe('KFDB read/write auth split', () => {
     expect(String(hit?.title)).toHaveLength(160);
     expect(hit?.summary).toBe('The automatic mirror now runs after every completed turn.');
     expect(hit?.title_truncated).toBe(true);
+  });
+
+  it('carries the commit body, not just the subject line, into the semantic summary', async () => {
+    const body = `Cloudflare WAF blocked the request. ${'y'.repeat(600)}`;
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      results: [{
+        id: 'embedding-commit',
+        labels: ['RickydataGitCommit'],
+        similarity: 0.72,
+        properties: {
+          entity_label: 'RickydataGitCommit',
+          file_path: 'RickydataGitCommit://44444444-4444-4444-8444-444444444444',
+        },
+        entity: {
+          _id: '44444444-4444-4444-8444-444444444444',
+          subject: 'fix(gateway): trusted IP bypass for rate limiting',
+          message: body,
+        },
+      }],
+      total_hits: 1,
+      took_ms: 3,
+    }));
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    const response = await kfdb.semanticSearch({
+      query: 'cloudflare WAF request blocked',
+      labels: ['RickydataGitCommit'],
+      minSimilarity: 0.45,
+      limit: 8,
+    }) as { labels: Array<{ result: { results: Array<Record<string, unknown>> } }> };
+    const hit = response.labels[0]?.result.results[0];
+
+    expect(hit?.title).toBe('fix(gateway): trusted IP bypass for rate limiting');
+    expect(hit?.summary).toBe(body);
+    expect(hit?.summary).not.toBe(hit?.title);
+    expect(hit?.content_null).toBeUndefined();
   });
 
   it('caps the label fan-out and reports truncation so a caller cannot storm KFDB', async () => {

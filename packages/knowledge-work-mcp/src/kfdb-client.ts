@@ -377,6 +377,11 @@ function semanticNodeId(filePath: string, entity: Record<string, unknown>): stri
   return uriTarget || '';
 }
 
+// A one-line subject is not an answer. Commit bodies and episode rationales
+// observed in production run 650-900 bytes, so 1200 carries them whole while
+// still bounding a 12-label fan-out. Upstream already caps the body at 12000.
+const SEMANTIC_SUMMARY_MAX = 1200;
+
 function boundedSemanticTitle(value: string, maxLength = 160): { title: string; truncated: boolean } {
   const normalized = value.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxLength) return { title: normalized, truncated: false };
@@ -395,7 +400,7 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
   const entityLabel = firstString(properties, ['entity_label']) || requestedLabel;
   const nodeId = semanticNodeId(filePath, entity);
   const slug = firstString(entity, ['slug', 'page_slug', 'roadmap_slug']) || nodeId;
-  const sourceTitle = firstString(entity, ['title', 'name', 'question', 'summary', 'objective', 'decision']);
+  const sourceTitle = firstString(entity, ['title', 'name', 'question', 'summary', 'objective', 'decision', 'subject']);
   const sourceSummary = firstString(entity, [
     'summary',
     'why_it_matters',
@@ -410,10 +415,15 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
     'content',
     'initial_prompt',
     'command_preview',
+    // Git-history labels: the answer lives in the commit body / episode rationale,
+    // never in the one-line subject that is already the title.
+    'message',
+    'problem_or_opportunity',
+    'implementation_summary',
   ]);
   const titleProjection = boundedSemanticTitle(sourceTitle || `${entityLabel} ${slug || 'result'}`);
   const title = titleProjection.title;
-  const summary = (sourceSummary || title).replace(/\s+/g, ' ').trim().slice(0, 200);
+  const summary = (sourceSummary || title).replace(/\s+/g, ' ').trim().slice(0, SEMANTIC_SUMMARY_MAX);
   return {
     node_id: nodeId,
     embedding_id: typeof value['id'] === 'string' ? value['id'] : '',
