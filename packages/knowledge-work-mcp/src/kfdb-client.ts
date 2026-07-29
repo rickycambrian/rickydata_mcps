@@ -1776,7 +1776,10 @@ export class KfdbKnowledgeClient {
       const body = {
         query: input.query,
         label,
-        limit: Math.min(input.limit * 4, 50),
+        // 10x, not 4x: the legacy commit stubs are roughly half the corpus for
+        // some labels and rank above the readable commits, so a 4x window came
+        // back entirely empty after the content-free cut.
+        limit: Math.min(input.limit * 10, 50),
         threshold: input.minSimilarity,
         include_entities: true,
       };
