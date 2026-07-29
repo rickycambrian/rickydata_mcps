@@ -647,6 +647,63 @@ describe('KFDB read/write auth split', () => {
     expect(hit?.content_null).toBeUndefined();
   });
 
+  it('drops provenance-only commit stubs so they cannot outrank readable commits', async () => {
+    // The live shape: legacy `rickydata.git_history.v1` nodes carry a vector but
+    // no text property at all, and rank above the rich commits on real queries.
+    const stub = (n: number) => ({
+      id: `embedding-stub-${n}`,
+      labels: ['RickydataGitCommit'],
+      similarity: 0.66,
+      properties: {
+        entity_label: 'RickydataGitCommit',
+        file_path: `RickydataGitCommit://5555555${n}-5555-5555-8555-555555555555`,
+      },
+      entity: {
+        _id: `5555555${n}-5555-5555-8555-555555555555`,
+        commit_sha: `deadbee${n}`,
+        schema_version: 'rickydata.git_history.v1',
+        provenance_status: 'observed_session',
+      },
+    });
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      results: [stub(1), stub(2), stub(3), {
+        id: 'embedding-real',
+        labels: ['RickydataGitCommit'],
+        similarity: 0.61,
+        properties: {
+          entity_label: 'RickydataGitCommit',
+          file_path: 'RickydataGitCommit://66666666-6666-6666-8666-666666666666',
+        },
+        entity: {
+          _id: '66666666-6666-6666-8666-666666666666',
+          subject: 'fix(levanto): defang payloads for the WAF',
+          message: 'The 403 came from a Cloudflare managed rule, not from us.',
+        },
+      }],
+      total_hits: 4,
+      took_ms: 3,
+    }));
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    const response = await kfdb.semanticSearch({
+      query: 'why did the levanto request 403',
+      labels: ['RickydataGitCommit'],
+      minSimilarity: 0.45,
+      limit: 3,
+    }) as { labels: Array<{ result: { results: Array<Record<string, unknown>>; content_free_hits_dropped?: number } }> };
+    const hits = response.labels[0]!.result.results;
+
+    expect(response.labels[0]!.result.content_free_hits_dropped).toBe(3);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.title).toBe('fix(levanto): defang payloads for the WAF');
+  });
+
   it('caps the label fan-out and reports truncation so a caller cannot storm KFDB', async () => {
     // Fresh Response per call — a shared one has a single-read body and would
     // trip the transient-read retry, inflating the call count.

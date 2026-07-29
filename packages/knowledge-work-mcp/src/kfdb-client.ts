@@ -1770,24 +1770,33 @@ export class KfdbKnowledgeClient {
     const truncated = requested.length - labels.length;
     const headers = await this.headersWithOptionalS2D();
     const searchLabel = async (label: string) => {
-      // session_kind is filtered client-side after projection, so over-fetch
-      // ClaudeCodeSession to keep `limit` matching hits after the cut.
+      // Two client-side cuts run after projection — content-free hits always,
+      // session_kind when asked — so over-fetch to keep `limit` meaningful.
       const filterKind = label === 'ClaudeCodeSession' ? input.sessionKind : undefined;
       const body = {
         query: input.query,
         label,
-        limit: filterKind ? Math.min(input.limit * 4, 50) : input.limit,
+        limit: Math.min(input.limit * 4, 50),
         threshold: input.minSimilarity,
         include_entities: true,
       };
       try {
         const response = await this.postJson('/api/v1/semantic/search', body, headers, true);
         const projected = projectSemanticResponse(response, label);
+        let hits = projected['results'] as Record<string, unknown>[];
+        // A hit whose entity carries no text at all is an empty slot: it burns a
+        // top-k place the model could have spent on something readable. Legacy
+        // provenance-only commit stubs are the population that does this.
+        const contentFree = hits.filter((h) => h['content_null'] === true).length;
+        if (contentFree > 0) {
+          hits = hits.filter((h) => h['content_null'] !== true);
+          projected['content_free_hits_dropped'] = contentFree;
+        }
         if (filterKind) {
-          const hits = projected['results'] as Record<string, unknown>[];
-          projected['results'] = hits.filter((h) => h['session_kind'] === filterKind).slice(0, input.limit);
+          hits = hits.filter((h) => h['session_kind'] === filterKind);
           projected['session_kind_filter'] = filterKind;
         }
+        projected['results'] = hits.slice(0, input.limit);
         return { label, ok: true, result: projected };
       } catch (err) {
         return { label, ok: false, error: err instanceof Error ? err.message : String(err) };
