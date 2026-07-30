@@ -16,6 +16,15 @@ export const DEFAULT_SEARCH_LABELS = [
 const SEMANTIC_SEARCH_LABEL_CAP = 40;
 const SEMANTIC_SEARCH_CONCURRENCY = 8;
 
+// A chunked write-up is stored one node per chunk, so a hit is a fragment of a
+// document, not the document. The chunk holding the decisive numbers often
+// matches the question badly on its own: the metrics dump from the 503 write-up
+// ranked 180th on "what was the decisive measurement", while its prose siblings
+// ranked 1-4. The agent then answers fluently and with citations from a third of
+// the evidence. So when a fragment is the best hit, return the whole document.
+const CHUNK_SOURCE_SCAN_LIMIT = 500;
+const CHUNK_DOCUMENT_MAX_CHUNKS = 40;
+
 async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length);
   let next = 0;
@@ -525,6 +534,9 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
     summary,
     slug,
     ...(asOf ? { as_of: asOf } : {}),
+    // Which document this is a fragment of, when it is one. See
+    // `expandChunkedSource`.
+    ...(firstString(entity, ['source']) ? { source: firstString(entity, ['source']) } : {}),
     ...(titleProjection.truncated ? { title_truncated: true } : {}),
     ...(sourceTitle || sourceSummary ? {} : { content_null: true }),
     ...(firstString(entity, ['session_kind']) ? { session_kind: firstString(entity, ['session_kind']) } : {}),
@@ -1852,6 +1864,52 @@ export class KfdbKnowledgeClient {
     };
   }
 
+  /**
+   * Return every chunk of the document the best fragment hit came from.
+   *
+   * Scans the label and filters on `source` client-side rather than asking
+   * `WHERE n.source = '...'`: on the private keyspace a property filter reads
+   * encrypted values and matches nothing, and this label is small enough that a
+   * bounded scan is cheaper than being wrong. Chunks come back in `title`
+   * order, which is heading-then-part — the order they were written in.
+   *
+   * Non-fatal: a failure here loses the expansion, never the search.
+   */
+  private async expandChunkedSource(
+    hits: Record<string, unknown>[],
+  ): Promise<Record<string, unknown> | undefined> {
+    const top = hits.find((hit) => typeof hit['source'] === 'string' && hit['source']);
+    if (!top) return undefined;
+    const source = top['source'] as string;
+    const label = String(top['entity_label'] ?? '');
+    // The label is interpolated into KQL; only ever a bare identifier.
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(label)) return undefined;
+    try {
+      const rows = (await this.queryKql(`MATCH (n:${label}) RETURN n.* LIMIT ${CHUNK_SOURCE_SCAN_LIMIT}`))
+        .map(unwrapRow);
+      const field = (row: Record<string, unknown>, name: string): string => {
+        const value = row[name] ?? row[`n.${name}`];
+        return typeof value === 'string' ? value : '';
+      };
+      const chunks = rows
+        .filter((row) => field(row, 'source') === source)
+        .map((row) => ({ title: field(row, 'title'), text: field(row, 'summary') }))
+        .filter((chunk) => chunk.text)
+        .sort((a, b) => a.title.localeCompare(b.title));
+      if (chunks.length < 2) return undefined;
+      return {
+        source,
+        entity_label: label,
+        chunks: chunks.slice(0, CHUNK_DOCUMENT_MAX_CHUNKS),
+        ...(chunks.length > CHUNK_DOCUMENT_MAX_CHUNKS
+          ? { chunks_truncated: chunks.length - CHUNK_DOCUMENT_MAX_CHUNKS }
+          : {}),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   async semanticSearch(input: SemanticSearchInput): Promise<unknown> {
     const requested = input.labels.length > 0 ? input.labels : DEFAULT_SEARCH_LABELS;
     // Each label is one HNSW search; cap the fan-out so a caller passing the whole
@@ -1897,6 +1955,8 @@ export class KfdbKnowledgeClient {
     };
     const results = await mapWithConcurrency(labels, SEMANTIC_SEARCH_CONCURRENCY, searchLabel);
     const suggestedKql = labels.flatMap((label) => KQL_EXPANSION_HINTS[label] ?? []);
+    const ranked = rankAcrossLabels(results, input.limit);
+    const sourceDocument = await this.expandChunkedSource(ranked);
     return {
       query: input.query,
       min_similarity: input.minSimilarity,
@@ -1907,7 +1967,9 @@ export class KfdbKnowledgeClient {
       // (`tools.ts` hands this straight back), so keeping the per-lane hits
       // too would just re-serve the same confusion at double the tokens —
       // `lanes` keeps the coverage and failure view without the duplicates.
-      results: rankAcrossLabels(results, input.limit),
+      results: ranked,
+      // The whole document behind the best fragment, when the best hit is one.
+      ...(sourceDocument ? { source_document: sourceDocument } : {}),
       lanes: results.map(summarizeLane),
       ...(truncated > 0 ? { labels_truncated: truncated, label_cap: SEMANTIC_SEARCH_LABEL_CAP } : {}),
       ...(suggestedKql.length > 0 ? { suggested_kql: suggestedKql } : {}),

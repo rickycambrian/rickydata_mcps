@@ -693,6 +693,65 @@ describe('KFDB read/write auth split', () => {
     expect(response.results[1]?.title).toBe('phase1-semantic-search-503 — Evidence');
   });
 
+  it('returns the whole document behind the best fragment hit', async () => {
+    // A write-up is stored one node per chunk. The chunk holding the decisive
+    // numbers matched "decisive measurement" 180th on the real corpus while its
+    // prose siblings ranked 1-4, so retrieving the fragment and stopping is how
+    // the agent answered from a third of the evidence.
+    const chunk = (heading: string, text: string) => ({
+      title: { String: `phase1-semantic-search-503-2026-07-27.md — ${heading}` },
+      summary: { String: text },
+      source: { String: 'phase1-semantic-search-503-2026-07-27.md' },
+    });
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      if (String(input).includes('/api/v1/query')) {
+        return jsonResponse({
+          data: [
+            chunk('Evidence', 'kfdb_hnsw_proxy_duration_seconds_count 9, sum 9.344445902, mean about 1.04 s.'),
+            chunk('Cause', 'HNSW_PROXY_ATTEMPT_TIMEOUT_MS was 1250 ms against a measured mean of 1040 ms.'),
+            // A different document must not be pulled in.
+            { ...chunk('Other', 'unrelated'), source: { String: 'some-other-doc.md' } },
+          ],
+        });
+      }
+      return jsonResponse({
+        results: [{
+          id: 'embedding-fragment',
+          labels: ['RickydataWorkInsight'],
+          similarity: 0.71,
+          properties: {
+            entity_label: 'RickydataWorkInsight',
+            file_path: 'RickydataWorkInsight://77777777-7777-7777-8777-777777777777',
+          },
+          entity: {
+            _id: '77777777-7777-7777-8777-777777777777',
+            title: 'phase1-semantic-search-503-2026-07-27.md — Cause',
+            summary: 'HNSW_PROXY_ATTEMPT_TIMEOUT_MS was 1250 ms against a measured mean of 1040 ms.',
+            source: 'phase1-semantic-search-503-2026-07-27.md',
+          },
+        }],
+        total_hits: 1,
+        took_ms: 2,
+      });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test', apiKey: 'key', walletAddress: '0xb3e6', s2d: null, fetchImpl,
+    });
+
+    const response = await kfdb.semanticSearch({
+      query: 'decisive measurement', labels: ['RickydataWorkInsight'], minSimilarity: 0.45, limit: 5,
+    }) as { source_document?: { source: string; chunks: Array<{ title: string; text: string }> } };
+
+    expect(response.source_document?.source).toBe('phase1-semantic-search-503-2026-07-27.md');
+    // Both chunks of this document, and only this document — including the
+    // Evidence chunk the search itself never surfaced.
+    expect(response.source_document?.chunks.map((c) => c.title)).toEqual([
+      'phase1-semantic-search-503-2026-07-27.md — Cause',
+      'phase1-semantic-search-503-2026-07-27.md — Evidence',
+    ]);
+    expect(response.source_document?.chunks[1]?.text).toContain('9.344445902');
+  });
+
   it('dates each hit so repeat incidents can be told apart, preferring when the work happened', async () => {
     // The graph holds the same failure more than once: a 2026-07-27 HNSW proxy
     // timeout write-up and several older 503 fixes, all with real bodies. Dateless

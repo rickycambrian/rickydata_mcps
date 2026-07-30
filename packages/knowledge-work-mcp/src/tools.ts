@@ -648,7 +648,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
   server.tool(
     'semantic_search',
-    'Semantic HNSW search over private graph labels. Set list_labels=true to discover searchable boundaries without adding another tool. Hits carry as_of, when the work happened: the same failure is often recorded several times across months, so check as_of before deciding which occurrence a question is about, and say which one you answered.',
+    'Semantic HNSW search over private graph labels. Set list_labels=true to discover searchable boundaries without adding another tool. Hits carry as_of, when the work happened: the same failure is often recorded several times across months, so check as_of before deciding which occurrence a question is about, and say which one you answered. When the best hit is one chunk of a longer write-up, source_document carries every chunk of that write-up in order — read it before answering, because the exact figures usually sit in a chunk that ranked far below the one you matched.',
     {
       query: z.string().optional().describe('Natural-language query. Required unless list_labels=true.'),
       labels: labelsSchema,
