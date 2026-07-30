@@ -1894,8 +1894,13 @@ export class KfdbKnowledgeClient {
    * Scans the label and filters on `source` client-side rather than asking
    * `WHERE n.source = '...'`: on the private keyspace a property filter reads
    * encrypted values and matches nothing, and this label is small enough that a
-   * bounded scan is cheaper than being wrong. Chunks come back in `title`
-   * order, which is heading-then-part — the order they were written in.
+   * bounded scan is cheaper than being wrong.
+   *
+   * Chunks come back in `title` order, and document order is a property of the
+   * data, not of this sort: an ingester MUST encode position in the title (see
+   * `rickydata_home/scripts/ingest-proof-docs.ts`, which pads an ordinal into
+   * it). Sorting on the heading alone put "Exit criteria" ahead of "Pre-deploy
+   * baseline" and handed the agent every proof doc backwards.
    *
    * Non-fatal: a failure here loses the expansion, never the search.
    */
