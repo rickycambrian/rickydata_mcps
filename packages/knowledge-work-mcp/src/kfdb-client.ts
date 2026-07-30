@@ -411,6 +411,30 @@ function rankAcrossLabels(lanes: unknown[], limit: number): Record<string, unkno
   return hits.slice(0, Math.max(1, limit * 2));
 }
 
+/**
+ * One line per lane: did it run, how much did it find, how good was its best.
+ * Enough to see a lane erroring or a label with no coverage, without re-serving
+ * the hits that `results` already carries.
+ */
+function summarizeLane(lane: unknown): Record<string, unknown> {
+  const record = lane && typeof lane === 'object' ? lane as Record<string, unknown> : {};
+  const label = record['label'];
+  if (record['ok'] !== true) return { label, ok: false, error: record['error'] };
+  const result = record['result'] && typeof record['result'] === 'object'
+    ? record['result'] as Record<string, unknown>
+    : {};
+  const hits = Array.isArray(result['results']) ? result['results'] as Record<string, unknown>[] : [];
+  const top = hits[0]?.['similarity'];
+  return {
+    label,
+    ok: true,
+    hits: hits.length,
+    ...(typeof top === 'number' ? { top_similarity: top } : {}),
+    ...(result['content_free_hits_dropped'] ? { content_free_hits_dropped: result['content_free_hits_dropped'] } : {}),
+    ...(result['session_kind_filter'] ? { session_kind_filter: result['session_kind_filter'] } : {}),
+  };
+}
+
 function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string, unknown> {
   const value = hit && typeof hit === 'object' ? hit as Record<string, unknown> : {};
   const properties = value['properties'] && typeof value['properties'] === 'object'
@@ -1834,12 +1858,14 @@ export class KfdbKnowledgeClient {
       query: input.query,
       min_similarity: input.minSimilarity,
       // Every lane returns its own top-k independently, so a 0.82 bullseye
-      // arrives beside 0.55 noise with nothing to tell them apart, and the
-      // model reads whichever lane it happens to reach first. Rank across
-      // lanes and put the winners up front; `labels` stays for callers that
-      // want the per-lane view.
-      top_results: rankAcrossLabels(results, input.limit),
-      labels: results,
+      // arrived beside 0.55 noise from eleven other lanes with nothing to tell
+      // them apart, and the model read whichever lane it reached first. Rank
+      // across lanes and return one list. The only consumer is the model
+      // (`tools.ts` hands this straight back), so keeping the per-lane hits
+      // too would just re-serve the same confusion at double the tokens —
+      // `lanes` keeps the coverage and failure view without the duplicates.
+      results: rankAcrossLabels(results, input.limit),
+      lanes: results.map(summarizeLane),
       ...(truncated > 0 ? { labels_truncated: truncated, label_cap: SEMANTIC_SEARCH_LABEL_CAP } : {}),
       ...(suggestedKql.length > 0 ? { suggested_kql: suggestedKql } : {}),
       authority: this.authorityMetadata(headers),

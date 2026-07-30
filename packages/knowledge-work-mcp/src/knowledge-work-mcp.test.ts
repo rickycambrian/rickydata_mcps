@@ -525,33 +525,27 @@ describe('KFDB read/write auth split', () => {
       minSimilarity: 0.45,
       limit: 8,
     })).resolves.toMatchObject({
-      labels: [
+      // One list, ranked by similarity across lanes: WikiPage at 0.75 outranks
+      // OpenQuestion at 0.68.
+      results: [
         {
-          label: 'WikiPage',
-          ok: true,
-          result: {
-            results: [{
-              node_id: '11111111-1111-4111-8111-111111111111',
-              embedding_id: 'embedding-doc-page',
-              title: 'The Agentic Knowledge Compiler',
-              summary: longSummary.slice(0, 1200),
-              slug: 'agentic-knowledge-compiler',
-            }],
-          },
+          node_id: '11111111-1111-4111-8111-111111111111',
+          embedding_id: 'embedding-doc-page',
+          title: 'The Agentic Knowledge Compiler',
+          summary: longSummary.slice(0, 1200),
+          slug: 'agentic-knowledge-compiler',
         },
         {
-          label: 'OpenQuestion',
-          ok: true,
-          result: {
-            results: [{
-              node_id: '22222222-2222-4222-8222-222222222222',
-              embedding_id: 'embedding-doc-question',
-              title: 'Do coding sessions flow into private KFDB automatically?',
-              summary: 'This distinguishes an automatic loop from an operator-only workflow.',
-              slug: '22222222-2222-4222-8222-222222222222',
-            }],
-          },
+          node_id: '22222222-2222-4222-8222-222222222222',
+          embedding_id: 'embedding-doc-question',
+          title: 'Do coding sessions flow into private KFDB automatically?',
+          summary: 'This distinguishes an automatic loop from an operator-only workflow.',
+          slug: '22222222-2222-4222-8222-222222222222',
         },
+      ],
+      lanes: [
+        { label: 'WikiPage', ok: true, hits: 1, top_similarity: 0.75 },
+        { label: 'OpenQuestion', ok: true, hits: 1, top_similarity: 0.68 },
       ],
     });
     const serialized = JSON.stringify(await kfdb.semanticSearch({
@@ -596,8 +590,8 @@ describe('KFDB read/write auth split', () => {
       labels: ['OpenQuestion'],
       minSimilarity: 0.45,
       limit: 8,
-    }) as { labels: Array<{ result: { results: Array<Record<string, unknown>> } }> };
-    const hit = response.labels[0]?.result.results[0];
+    }) as { results: Array<Record<string, unknown>> };
+    const hit = response.results[0];
 
     expect(hit?.title).toBe(`${question.slice(0, 159)}…`);
     expect(String(hit?.title)).toHaveLength(160);
@@ -638,8 +632,8 @@ describe('KFDB read/write auth split', () => {
       labels: ['RickydataGitCommit'],
       minSimilarity: 0.45,
       limit: 8,
-    }) as { labels: Array<{ result: { results: Array<Record<string, unknown>> } }> };
-    const hit = response.labels[0]?.result.results[0];
+    }) as { results: Array<Record<string, unknown>> };
+    const hit = response.results[0];
 
     expect(hit?.title).toBe('fix(gateway): trusted IP bypass for rate limiting');
     expect(hit?.summary).toBe(body);
@@ -696,10 +690,13 @@ describe('KFDB read/write auth split', () => {
       labels: ['RickydataGitCommit'],
       minSimilarity: 0.45,
       limit: 3,
-    }) as { labels: Array<{ result: { results: Array<Record<string, unknown>>; content_free_hits_dropped?: number } }> };
-    const hits = response.labels[0]!.result.results;
+    }) as {
+      results: Array<Record<string, unknown>>;
+      lanes: Array<{ content_free_hits_dropped?: number }>;
+    };
+    const hits = response.results;
 
-    expect(response.labels[0]!.result.content_free_hits_dropped).toBe(3);
+    expect(response.lanes[0]!.content_free_hits_dropped).toBe(3);
     expect(hits).toHaveLength(1);
     expect(hits[0]!.title).toBe('fix(levanto): defang payloads for the WAF');
   });
@@ -718,9 +715,9 @@ describe('KFDB read/write auth split', () => {
     const labels = Array.from({ length: 50 }, (_, i) => `Label${i}`);
     const response = await kfdb.semanticSearch({
       query: 'everything', labels, minSimilarity: 0.45, limit: 8,
-    }) as { labels: unknown[]; labels_truncated?: number; label_cap?: number };
+    }) as { lanes: unknown[]; labels_truncated?: number; label_cap?: number };
 
-    expect(response.labels).toHaveLength(40);   // capped
+    expect(response.lanes).toHaveLength(40);   // capped
     expect(response.labels_truncated).toBe(10);
     expect(response.label_cap).toBe(40);
     expect(fetchImpl).toHaveBeenCalledTimes(40); // one HNSW search per kept label, no more
@@ -2217,11 +2214,11 @@ describe('cross-lane ranking', () => {
 
     const response = await kfdb.semanticSearch({
       query: 'levanto waf', labels: ['WikiPage', 'Plan', 'RickydataWorkInsight'], minSimilarity: 0.5, limit: 3,
-    }) as { top_results: Array<{ entity_label: string; similarity: number }>; labels: unknown[] };
+    }) as { results: Array<{ entity_label: string; similarity: number }>; lanes: unknown[] };
 
-    expect(response.top_results.map((hit) => hit.entity_label)).toEqual(['RickydataWorkInsight', 'Plan', 'WikiPage']);
-    expect(response.top_results[0]!.similarity).toBe(0.82);
-    // The per-lane view must survive for callers that already read it.
-    expect(response.labels).toHaveLength(3);
+    expect(response.results.map((hit) => hit.entity_label)).toEqual(['RickydataWorkInsight', 'Plan', 'WikiPage']);
+    expect(response.results[0]!.similarity).toBe(0.82);
+    // Lane coverage stays visible so an erroring or empty label is still legible.
+    expect(response.lanes).toHaveLength(3);
   });
 });
