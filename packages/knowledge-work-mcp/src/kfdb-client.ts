@@ -388,6 +388,29 @@ function boundedSemanticTitle(value: string, maxLength = 160): { title: string; 
   return { title: `${normalized.slice(0, maxLength - 1)}…`, truncated: true };
 }
 
+/**
+ * Flatten the per-label lanes into one similarity-ranked list.
+ *
+ * `limit` is per lane, so the merged list keeps 2x that — enough that a second
+ * strong lane still gets a voice, small enough that the model isn't handed 60
+ * hits of which 55 are noise.
+ */
+function rankAcrossLabels(lanes: unknown[], limit: number): Record<string, unknown>[] {
+  const hits: Record<string, unknown>[] = [];
+  for (const lane of lanes) {
+    const record = lane && typeof lane === 'object' ? lane as Record<string, unknown> : {};
+    if (record['ok'] !== true) continue;
+    const result = record['result'] && typeof record['result'] === 'object'
+      ? record['result'] as Record<string, unknown>
+      : {};
+    const laneHits = Array.isArray(result['results']) ? result['results'] as Record<string, unknown>[] : [];
+    hits.push(...laneHits);
+  }
+  hits.sort((a, b) => (typeof b['similarity'] === 'number' ? b['similarity'] : 0)
+    - (typeof a['similarity'] === 'number' ? a['similarity'] : 0));
+  return hits.slice(0, Math.max(1, limit * 2));
+}
+
 function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string, unknown> {
   const value = hit && typeof hit === 'object' ? hit as Record<string, unknown> : {};
   const properties = value['properties'] && typeof value['properties'] === 'object'
@@ -1810,6 +1833,12 @@ export class KfdbKnowledgeClient {
     return {
       query: input.query,
       min_similarity: input.minSimilarity,
+      // Every lane returns its own top-k independently, so a 0.82 bullseye
+      // arrives beside 0.55 noise with nothing to tell them apart, and the
+      // model reads whichever lane it happens to reach first. Rank across
+      // lanes and put the winners up front; `labels` stays for callers that
+      // want the per-lane view.
+      top_results: rankAcrossLabels(results, input.limit),
       labels: results,
       ...(truncated > 0 ? { labels_truncated: truncated, label_cap: SEMANTIC_SEARCH_LABEL_CAP } : {}),
       ...(suggestedKql.length > 0 ? { suggested_kql: suggestedKql } : {}),

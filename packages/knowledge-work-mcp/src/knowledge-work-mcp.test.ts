@@ -2193,3 +2193,35 @@ describe('self-minting S2D label', () => {
     }
   });
 });
+
+describe('cross-lane ranking', () => {
+  it('puts the highest-similarity hit first regardless of which label lane found it', async () => {
+    const byLabel: Record<string, number> = { RickydataWorkInsight: 0.82, Plan: 0.61, WikiPage: 0.58 };
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const label = JSON.parse(String((init as RequestInit).body)).label as string;
+      return jsonResponse({
+        results: [{
+          id: `embedding-${label}`,
+          labels: [label],
+          similarity: byLabel[label] ?? 0.5,
+          properties: { entity_label: label, file_path: `${label}://11111111-1111-5111-8111-111111111111` },
+          entity: { _id: '11111111-1111-5111-8111-111111111111', title: `${label} hit`, summary: `body of ${label}` },
+        }],
+        total_hits: 1,
+        took_ms: 2,
+      });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test', apiKey: 'key', walletAddress: '0xb3e6', s2d: null, fetchImpl,
+    });
+
+    const response = await kfdb.semanticSearch({
+      query: 'levanto waf', labels: ['WikiPage', 'Plan', 'RickydataWorkInsight'], minSimilarity: 0.5, limit: 3,
+    }) as { top_results: Array<{ entity_label: string; similarity: number }>; labels: unknown[] };
+
+    expect(response.top_results.map((hit) => hit.entity_label)).toEqual(['RickydataWorkInsight', 'Plan', 'WikiPage']);
+    expect(response.top_results[0]!.similarity).toBe(0.82);
+    // The per-lane view must survive for callers that already read it.
+    expect(response.labels).toHaveLength(3);
+  });
+});
