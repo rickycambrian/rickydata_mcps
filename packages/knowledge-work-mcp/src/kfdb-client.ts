@@ -398,6 +398,28 @@ function boundedSemanticTitle(value: string, maxLength = 160): { title: string; 
 }
 
 /**
+ * Cap a projected body, cutting on a word boundary and saying so.
+ *
+ * A bare `slice()` ends mid-word, and the model reads that as a damaged record
+ * rather than a long one: asked whether `defangForWaf` still exists, with the
+ * removing commit sitting in its context, it answered "the summary was truncated
+ * mid-word, so the full scope of the fix and its current status are not visible"
+ * and then "the graph does not contain information about whether defangForWaf
+ * still exists". A visible, deliberate cut is not evidence of absence; a mid-word
+ * one apparently is.
+ */
+function boundedSemanticSummary(value: string, maxLength = SEMANTIC_SUMMARY_MAX): { summary: string; truncated: boolean } {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return { summary: normalized, truncated: false };
+  const cut = normalized.slice(0, maxLength);
+  const lastSpace = cut.lastIndexOf(' ');
+  // Only back up to the word boundary when one is close enough that doing so
+  // does not throw away a meaningful amount of the body.
+  const body = lastSpace > maxLength - 80 ? cut.slice(0, lastSpace) : cut;
+  return { summary: `${body.trimEnd()} […truncated, full text in source_document]`, truncated: true };
+}
+
+/**
  * Flatten the per-label lanes into one similarity-ranked list.
  *
  * `limit` is per lane, so the merged list keeps 2x that — enough that a second
@@ -504,7 +526,8 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
   ]);
   const titleProjection = boundedSemanticTitle(sourceTitle || `${entityLabel} ${slug || 'result'}`);
   const title = titleProjection.title;
-  const summary = (sourceSummary || title).replace(/\s+/g, ' ').trim().slice(0, SEMANTIC_SUMMARY_MAX);
+  const summaryProjection = boundedSemanticSummary(sourceSummary || title);
+  const summary = summaryProjection.summary;
   // When did this happen. Every hit was dateless, and the graph records the same
   // incident more than once: "KFDB semantic search was returning 503" matches a
   // 2026-07-27 proxy-timeout write-up and half a dozen older 503 fixes, all with
@@ -534,6 +557,7 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
     summary,
     slug,
     ...(asOf ? { as_of: asOf } : {}),
+    ...(summaryProjection.truncated ? { summary_truncated: true } : {}),
     // Which document this is a fragment of, when it is one. See
     // `expandChunkedSource`.
     ...(firstString(entity, ['source']) ? { source: firstString(entity, ['source']) } : {}),
@@ -1967,9 +1991,14 @@ export class KfdbKnowledgeClient {
       // (`tools.ts` hands this straight back), so keeping the per-lane hits
       // too would just re-serve the same confusion at double the tokens —
       // `lanes` keeps the coverage and failure view without the duplicates.
-      results: ranked,
-      // The whole document behind the best fragment, when the best hit is one.
+      // The whole document behind the best fragment comes *before* the hit list.
+      // Round 11 shipped it after `results` and the agent anchored on the ranked
+      // summaries — one turn declared "the graph does not contain information
+      // about whether defangForWaf still exists" while a chunk titled
+      // "defangForWaf no longer exists: commit eab56bf0 removed Levanto entirely
+      // nine days later" sat further down the same payload.
       ...(sourceDocument ? { source_document: sourceDocument } : {}),
+      results: ranked,
       lanes: results.map(summarizeLane),
       ...(truncated > 0 ? { labels_truncated: truncated, label_cap: SEMANTIC_SEARCH_LABEL_CAP } : {}),
       ...(suggestedKql.length > 0 ? { suggested_kql: suggestedKql } : {}),

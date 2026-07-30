@@ -693,6 +693,48 @@ describe('KFDB read/write auth split', () => {
     expect(response.results[1]?.title).toBe('phase1-semantic-search-503 — Evidence');
   });
 
+  it('cuts a long body on a word boundary and leads with the document, not the hit list', async () => {
+    // A mid-word cut reads to the model as a damaged record: one turn answered
+    // "the summary was truncated mid-word ... the graph does not contain
+    // information about whether defangForWaf still exists" while the removing
+    // commit sat further down the same payload.
+    const long = `${'defang '.repeat(200)}eab56bf0 removed Levanto entirely nine days later`;
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      if (String(input).includes('/api/v1/query')) {
+        return jsonResponse({ data: [
+          { title: { String: 'doc.md — A' }, summary: { String: long }, source: { String: 'doc.md' } },
+          { title: { String: 'doc.md — B' }, summary: { String: 'the WAF finding still applies' }, source: { String: 'doc.md' } },
+        ] });
+      }
+      return jsonResponse({
+        results: [{
+          id: 'e1',
+          labels: ['RickydataWorkInsight'],
+          similarity: 0.7,
+          properties: { entity_label: 'RickydataWorkInsight', file_path: 'RickydataWorkInsight://66666666-6666-6666-8666-666666666666' },
+          entity: { _id: '66666666-6666-6666-8666-666666666666', title: 'doc.md — A', summary: long, source: 'doc.md' },
+        }],
+        total_hits: 1,
+      });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test', apiKey: 'key', walletAddress: '0xb3e6', s2d: null, fetchImpl,
+    });
+
+    const response = await kfdb.semanticSearch({
+      query: 'does defangForWaf still exist', labels: ['RickydataWorkInsight'], minSimilarity: 0.45, limit: 5,
+    }) as Record<string, unknown>;
+    const hit = (response['results'] as Array<Record<string, unknown>>)[0]!;
+
+    expect(hit['summary_truncated']).toBe(true);
+    expect(hit['summary']).toContain('[…truncated, full text in source_document]');
+    // Word boundary: the visible body must not end mid-token.
+    expect(String(hit['summary']).replace(' […truncated, full text in source_document]', '')).toMatch(/defang$/);
+    // The document leads the payload, so the model meets it before the hit list.
+    const keys = Object.keys(response);
+    expect(keys.indexOf('source_document')).toBeLessThan(keys.indexOf('results'));
+  });
+
   it('returns the whole document behind the best fragment hit', async () => {
     // A write-up is stored one node per chunk. The chunk holding the decisive
     // numbers matched "decisive measurement" 180th on the real corpus while its
