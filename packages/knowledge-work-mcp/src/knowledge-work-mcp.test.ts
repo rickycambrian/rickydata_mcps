@@ -492,6 +492,11 @@ describe('KFDB read/write auth split', () => {
           took_ms: 12,
         });
       }
+      // Every request carries the always-on write-up lanes too; only the two
+      // labels this test is about return anything.
+      if (body['label'] !== 'OpenQuestion') {
+        return jsonResponse({ results: [], total_hits: 0, took_ms: 1 });
+      }
       return jsonResponse({
         results: [{
           id: 'embedding-doc-question',
@@ -543,10 +548,12 @@ describe('KFDB read/write auth split', () => {
           slug: '22222222-2222-4222-8222-222222222222',
         },
       ],
-      lanes: [
+      // Containment, not position: the always-on write-up lanes run first and
+      // are empty here, and this test is about hydration, not lane order.
+      lanes: expect.arrayContaining([
         { label: 'WikiPage', ok: true, hits: 1, top_similarity: 0.75 },
         { label: 'OpenQuestion', ok: true, hits: 1, top_similarity: 0.68 },
-      ],
+      ]),
     });
     const serialized = JSON.stringify(await kfdb.semanticSearch({
       query: 'automatic knowledge loop',
@@ -639,6 +646,39 @@ describe('KFDB read/write auth split', () => {
     expect(hit?.summary).toBe(body);
     expect(hit?.summary).not.toBe(hit?.title);
     expect(hit?.content_null).toBeUndefined();
+  });
+
+  it('searches the write-up labels even when the caller picked others', async () => {
+    // Live failure: "KFDB semantic search 503 — what was the actual cause?" went
+    // out as GitCommit/DevelopmentEpisode/Session/HomeDecision, and the write-up
+    // holding the answer is a RickydataWorkInsight. Narrowing must add lanes,
+    // never remove these two.
+    const searched: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit)?.body ?? '{}')) as { label?: string };
+      if (body.label) searched.push(body.label);
+      return jsonResponse({ results: [], total_hits: 0, took_ms: 1 });
+    });
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test',
+      apiKey: 'key',
+      walletAddress: '0xb3e6',
+      s2d: null,
+      fetchImpl,
+    });
+
+    await kfdb.semanticSearch({
+      query: 'KFDB semantic search 503 error cause',
+      labels: ['RickydataGitCommit', 'RickydataDevelopmentEpisode', 'HomeDecision'],
+      minSimilarity: 0.45,
+      limit: 8,
+    });
+
+    expect(searched).toContain('RickydataWorkInsight');
+    expect(searched).toContain('RickydataExplainer');
+    expect(searched).toContain('RickydataGitCommit');
+    // The caller's own labels are not duplicated by the union.
+    expect(new Set(searched).size).toBe(searched.length);
   });
 
   it('keeps one hit per distinct body so duplicate rows cannot crowd the top-k', async () => {
@@ -928,7 +968,9 @@ describe('KFDB read/write auth split', () => {
     }) as { lanes: unknown[]; labels_truncated?: number; label_cap?: number };
 
     expect(response.lanes).toHaveLength(40);   // capped
-    expect(response.labels_truncated).toBe(10);
+    // 50 asked for + the 2 always-on write-up labels, which lead so the cap
+    // can never be what drops them.
+    expect(response.labels_truncated).toBe(12);
     expect(response.label_cap).toBe(40);
     expect(fetchImpl).toHaveBeenCalledTimes(40); // one HNSW search per kept label, no more
   });
@@ -2426,9 +2468,11 @@ describe('cross-lane ranking', () => {
       query: 'levanto waf', labels: ['WikiPage', 'Plan', 'RickydataWorkInsight'], minSimilarity: 0.5, limit: 3,
     }) as { results: Array<{ entity_label: string; similarity: number }>; lanes: unknown[] };
 
-    expect(response.results.map((hit) => hit.entity_label)).toEqual(['RickydataWorkInsight', 'Plan', 'WikiPage']);
+    expect(response.results.map((hit) => hit.entity_label).slice(0, 3))
+      .toEqual(['RickydataWorkInsight', 'Plan', 'WikiPage']);
     expect(response.results[0]!.similarity).toBe(0.82);
-    // Lane coverage stays visible so an erroring or empty label is still legible.
-    expect(response.lanes).toHaveLength(3);
+    // Lane coverage stays visible so an erroring or empty label is still
+    // legible. Four lanes: the three asked for plus always-on RickydataExplainer.
+    expect(response.lanes).toHaveLength(4);
   });
 });

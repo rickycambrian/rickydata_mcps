@@ -12,6 +12,16 @@ export const DEFAULT_SEARCH_LABELS = [
   'Learning', 'RickydataWorkInsight', 'RickydataExplainer', 'ContentArtifact',
 ];
 
+// Searched on every query, whatever the caller asked for. `labels` exists to
+// bound fan-out, but an agent that picks labels picks them from the question's
+// vocabulary, and a question never says which label its answer was filed under.
+// Observed: "KFDB semantic search 503 — what was the actual cause?" was sent to
+// GitCommit/DevelopmentEpisode/Session/HomeDecision, and the write-up holding
+// the answer is a RickydataWorkInsight, so the search could not have succeeded.
+// These two labels are hand-written write-ups end to end — never noise, and
+// small enough that always searching them costs one HNSW call each.
+const ALWAYS_SEARCH_LABELS = ['RickydataWorkInsight', 'RickydataExplainer'];
+
 // Fan-out guards for multi-label semantic search (one HNSW query per label).
 const SEMANTIC_SEARCH_LABEL_CAP = 40;
 const SEMANTIC_SEARCH_CONCURRENCY = 8;
@@ -1940,7 +1950,11 @@ export class KfdbKnowledgeClient {
   }
 
   async semanticSearch(input: SemanticSearchInput): Promise<unknown> {
-    const requested = input.labels.length > 0 ? input.labels : DEFAULT_SEARCH_LABELS;
+    // Always-on labels lead, so the cap can never be the thing that drops them.
+    const requested = [...new Set([
+      ...ALWAYS_SEARCH_LABELS,
+      ...(input.labels.length > 0 ? input.labels : DEFAULT_SEARCH_LABELS),
+    ])];
     // Each label is one HNSW search; cap the fan-out so a caller passing the whole
     // catalogue can't storm KFDB, and bound concurrency for the rest.
     const labels = requested.slice(0, SEMANTIC_SEARCH_LABEL_CAP);
