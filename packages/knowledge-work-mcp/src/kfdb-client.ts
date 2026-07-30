@@ -471,6 +471,23 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
   const titleProjection = boundedSemanticTitle(sourceTitle || `${entityLabel} ${slug || 'result'}`);
   const title = titleProjection.title;
   const summary = (sourceSummary || title).replace(/\s+/g, ' ').trim().slice(0, SEMANTIC_SUMMARY_MAX);
+  // When did this happen. Every hit was dateless, and the graph records the same
+  // incident more than once: "KFDB semantic search was returning 503" matches a
+  // 2026-07-27 proxy-timeout write-up and half a dozen older 503 fixes, all with
+  // real bodies. With no date the model cannot tell which one a question means and
+  // answers a fluent, well-sourced account of the wrong episode. The label-specific
+  // fields come first because `_updated_at` is when the row was last written, not
+  // when the work happened.
+  const asOf = firstString(entity, [
+    'occurred_at',
+    'authored_at',
+    'observed_at',
+    'decided_at',
+    'as_of',
+    'created_at',
+    '_created_at',
+    '_updated_at',
+  ]);
   return {
     node_id: nodeId,
     embedding_id: typeof value['id'] === 'string' ? value['id'] : '',
@@ -482,6 +499,7 @@ function projectSemanticHit(hit: unknown, requestedLabel: string): Record<string
     title,
     summary,
     slug,
+    ...(asOf ? { as_of: asOf } : {}),
     ...(titleProjection.truncated ? { title_truncated: true } : {}),
     ...(sourceTitle || sourceSummary ? {} : { content_null: true }),
     ...(firstString(entity, ['session_kind']) ? { session_kind: firstString(entity, ['session_kind']) } : {}),

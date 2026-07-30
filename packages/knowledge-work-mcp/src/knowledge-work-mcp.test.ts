@@ -641,6 +641,63 @@ describe('KFDB read/write auth split', () => {
     expect(hit?.content_null).toBeUndefined();
   });
 
+  it('dates each hit so repeat incidents can be told apart, preferring when the work happened', async () => {
+    // The graph holds the same failure more than once: a 2026-07-27 HNSW proxy
+    // timeout write-up and several older 503 fixes, all with real bodies. Dateless
+    // hits let the model answer the wrong episode fluently.
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      results: [
+        {
+          id: 'embedding-recent',
+          labels: ['RickydataWorkInsight'],
+          similarity: 0.75,
+          properties: {
+            entity_label: 'RickydataWorkInsight',
+            file_path: 'RickydataWorkInsight://66666666-6666-6666-8666-666666666666',
+          },
+          entity: {
+            _id: '66666666-6666-6666-8666-666666666666',
+            title: 'phase1-semantic-search-503 — Fixes',
+            summary: 'HNSW_PROXY_ATTEMPT_TIMEOUT_MS 1250 to 2500.',
+            // The row was rewritten later than the work happened; `occurred_at` wins.
+            occurred_at: '2026-07-27T13:59:10.000Z',
+            _updated_at: '2026-07-29T00:00:00.000Z',
+          },
+        },
+        {
+          id: 'embedding-older',
+          labels: ['RickydataGitCommit'],
+          similarity: 0.74,
+          properties: {
+            entity_label: 'RickydataGitCommit',
+            file_path: 'RickydataGitCommit://77777777-7777-7777-8777-777777777777',
+          },
+          entity: {
+            _id: '77777777-7777-7777-8777-777777777777',
+            subject: 'fix: semantic search 503 when HNSW not ready',
+            message: `An earlier, unrelated 503. ${'z'.repeat(300)}`,
+            authored_at: '2026-06-11T09:00:00.000Z',
+          },
+        },
+      ],
+      total_hits: 2,
+      took_ms: 3,
+    }));
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test', apiKey: 'key', walletAddress: '0xb3e6', s2d: null, fetchImpl,
+    });
+
+    const response = await kfdb.semanticSearch({
+      query: 'semantic search 503 root cause',
+      labels: ['RickydataWorkInsight'],
+      minSimilarity: 0.45,
+      limit: 8,
+    }) as { results: Array<Record<string, unknown>> };
+
+    expect(response.results[0]?.as_of).toBe('2026-07-27T13:59:10.000Z');
+    expect(response.results[1]?.as_of).toBe('2026-06-11T09:00:00.000Z');
+  });
+
   it('drops provenance-only commit stubs so they cannot outrank readable commits', async () => {
     // The live shape: legacy `rickydata.git_history.v1` nodes carry a vector but
     // no text property at all, and rank above the rich commits on real queries.
