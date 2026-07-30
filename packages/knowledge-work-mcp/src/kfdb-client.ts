@@ -408,7 +408,32 @@ function rankAcrossLabels(lanes: unknown[], limit: number): Record<string, unkno
   }
   hits.sort((a, b) => (typeof b['similarity'] === 'number' ? b['similarity'] : 0)
     - (typeof a['similarity'] === 'number' ? a['similarity'] : 0));
-  return hits.slice(0, Math.max(1, limit * 2));
+  // Dedup again after the merge: one document can be reachable from two labels.
+  return dedupeByBody(hits).slice(0, Math.max(1, limit * 2));
+}
+
+/**
+ * Keep one hit per distinct body, highest similarity first.
+ *
+ * Some labels hold many rows that say the same thing — six identical "The prompt
+ * was truncated mid-sentence" HomeDecision nodes took a third of the top 18 on a
+ * real query — and a repeated hit tells the model nothing it did not already have
+ * while displacing something it needs.
+ *
+ * Keyed on the body rather than the title, so genuinely distinct chunks of one
+ * write-up all survive. Must run *before* the per-lane `slice(0, limit)`: by the
+ * time the lanes are merged the duplicates have already pushed the diverse hits
+ * out of the lane.
+ */
+function dedupeByBody(hits: Record<string, unknown>[]): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  return hits.filter((hit) => {
+    const key = String(hit['summary'] ?? '').slice(0, 400);
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /**
@@ -1864,7 +1889,7 @@ export class KfdbKnowledgeClient {
           hits = hits.filter((h) => h['session_kind'] === filterKind);
           projected['session_kind_filter'] = filterKind;
         }
-        projected['results'] = hits.slice(0, input.limit);
+        projected['results'] = dedupeByBody(hits).slice(0, input.limit);
         return { label, ok: true, result: projected };
       } catch (err) {
         return { label, ok: false, error: err instanceof Error ? err.message : String(err) };

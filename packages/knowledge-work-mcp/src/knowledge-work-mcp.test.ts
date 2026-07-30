@@ -641,6 +641,58 @@ describe('KFDB read/write auth split', () => {
     expect(hit?.content_null).toBeUndefined();
   });
 
+  it('keeps one hit per distinct body so duplicate rows cannot crowd the top-k', async () => {
+    // Live shape: six HomeDecision rows carrying the same text took a third of
+    // the top 18 on a real query.
+    const dupe = (n: number) => ({
+      id: `embedding-dupe-${n}`,
+      labels: ['HomeDecision'],
+      similarity: 0.69 - n * 0.001,
+      properties: {
+        entity_label: 'HomeDecision',
+        file_path: `HomeDecision://8888888${n}-8888-8888-8888-888888888888`,
+      },
+      entity: {
+        _id: `8888888${n}-8888-8888-8888-888888888888`,
+        title: 'The prompt was truncated mid-sentence',
+        summary: 'The prompt was truncated mid-sentence — confirm the intended meaning before acting.',
+      },
+    });
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      results: [
+        dupe(0), dupe(1), dupe(2), dupe(3),
+        {
+          id: 'embedding-real',
+          labels: ['HomeDecision'],
+          similarity: 0.62,
+          properties: {
+            entity_label: 'HomeDecision',
+            file_path: 'HomeDecision://99999999-9999-9999-8999-999999999999',
+          },
+          entity: {
+            _id: '99999999-9999-9999-8999-999999999999',
+            title: 'phase1-semantic-search-503 — Evidence',
+            summary: 'kfdb_hnsw_proxy_duration_seconds_count 9 and sum 9.344445902.',
+          },
+        },
+      ],
+      total_hits: 5,
+      took_ms: 2,
+    }));
+    const kfdb = new KfdbKnowledgeClient({
+      baseUrl: 'https://kfdb.test', apiKey: 'key', walletAddress: '0xb3e6', s2d: null, fetchImpl,
+    });
+
+    const response = await kfdb.semanticSearch({
+      query: 'decisive measurement', labels: ['HomeDecision'], minSimilarity: 0.45, limit: 2,
+    }) as { results: Array<Record<string, unknown>> };
+
+    // limit 2 -> 4 merged slots: without dedup all four would be the same row and
+    // the Evidence chunk would never be seen.
+    expect(response.results).toHaveLength(2);
+    expect(response.results[1]?.title).toBe('phase1-semantic-search-503 — Evidence');
+  });
+
   it('dates each hit so repeat incidents can be told apart, preferring when the work happened', async () => {
     // The graph holds the same failure more than once: a 2026-07-27 HNSW proxy
     // timeout write-up and several older 503 fixes, all with real bodies. Dateless
